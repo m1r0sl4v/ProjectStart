@@ -1,11 +1,657 @@
+```html
 <!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Document</title>
-    </head>
-    <body>
-        <h1>Texts</h1>
-    </body>
+
+<html lang="uk">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta
+        name="viewport"
+        content="width=device-width, initial-scale=1.0"
+    >
+
+    <title>
+        Конструктор житла
+    </title>
+
+
+    <style>
+
+        * {
+            box-sizing: border-box;
+        }
+
+
+        body {
+
+            margin: 0;
+
+            padding: 40px;
+
+            font-family: Arial, sans-serif;
+
+            background: #f2f2f2;
+
+            color: #111;
+        }
+
+
+        .container {
+
+            width: 100%;
+
+            max-width: 700px;
+
+            margin: auto;
+
+            padding: 30px;
+
+            background: white;
+
+            border-radius: 16px;
+
+            box-shadow:
+                0 5px 20px
+                rgba(0, 0, 0, 0.08);
+        }
+
+
+        h1 {
+
+            text-align: center;
+
+            margin-top: 0;
+        }
+
+
+        h3 {
+
+            margin-top: 30px;
+        }
+
+
+        .types {
+
+            display: flex;
+
+            gap: 15px;
+
+            margin-top: 20px;
+        }
+
+
+        .type {
+
+            flex: 1;
+
+            padding: 30px 20px;
+
+            text-align: center;
+
+            border: 2px solid #ddd;
+
+            border-radius: 12px;
+
+            cursor: pointer;
+
+            font-size: 18px;
+        }
+
+
+        .type:hover {
+
+            border-color: #777;
+        }
+
+
+        .type input {
+
+            display: none;
+        }
+
+
+        .type.selected {
+
+            border-color: #111;
+
+            background: #f0f0f0;
+        }
+
+
+        .icon {
+
+            font-size: 40px;
+
+            margin-bottom: 10px;
+        }
+
+
+        .field {
+
+            margin-top: 20px;
+        }
+
+
+        .field label {
+
+            display: block;
+
+            margin-bottom: 8px;
+
+            font-weight: bold;
+        }
+
+
+        input,
+        select {
+
+            width: 100%;
+
+            padding: 13px;
+
+            border: 1px solid #ccc;
+
+            border-radius: 8px;
+
+            font-size: 16px;
+
+            background: white;
+        }
+
+
+        input:focus,
+        select:focus {
+
+            outline: none;
+
+            border-color: #111;
+        }
+
+
+        #houseFields {
+
+            display: none;
+        }
+
+
+        button {
+
+            width: 100%;
+
+            margin-top: 30px;
+
+            padding: 15px;
+
+            border: none;
+
+            border-radius: 8px;
+
+            background: #111;
+
+            color: white;
+
+            font-size: 16px;
+
+            cursor: pointer;
+        }
+
+
+        button:hover {
+
+            background: #333;
+        }
+
+    </style>
+
+</head>
+
+
+<body>
+
+
+<div class="container">
+
+
+    <h1>
+        Конструктор житла
+    </h1>
+
+
+    <form
+        action="/calculate"
+        method="POST"
+    >
+
+
+        <!-- =========================
+             Місто
+             ========================= -->
+
+        <h3>
+            Місто
+        </h3>
+
+
+        <div class="field">
+
+            <label for="city">
+                Виберіть місто
+            </label>
+
+
+            <select
+                name="city"
+                id="city"
+                required
+            >
+
+                <option value="">
+                    Виберіть місто
+                </option>
+
+
+                {% for key, city in cities.items() %}
+
+                    <option value="{{ key }}">
+                        {{ city.name }}
+                    </option>
+
+                {% endfor %}
+
+            </select>
+
+        </div>
+
+
+        <!-- =========================
+             Тип житла
+             ========================= -->
+
+        <h3>
+            Що ви хочете створити?
+        </h3>
+
+
+        <div class="types">
+
+
+            <label
+                class="type"
+                id="apartmentType"
+            >
+
+                <input
+                    type="radio"
+                    name="building_type"
+                    value="apartment"
+                    onchange="selectType('apartment')"
+                    required
+                >
+
+
+                <div class="icon">
+                    🏢
+                </div>
+
+
+                Квартира
+
+            </label>
+
+
+            <label
+                class="type"
+                id="houseType"
+            >
+
+                <input
+                    type="radio"
+                    name="building_type"
+                    value="house"
+                    onchange="selectType('house')"
+                >
+
+
+                <div class="icon">
+                    🏠
+                </div>
+
+
+                Будинок
+
+            </label>
+
+
+        </div>
+
+
+        <!-- =========================
+             Кімнати
+             ========================= -->
+
+        <div class="field">
+
+            <label for="rooms">
+                Кількість кімнат
+            </label>
+
+
+            <select
+                name="rooms"
+                id="rooms"
+                required
+            >
+
+                <option value="1">
+                    1 кімната
+                </option>
+
+                <option value="2">
+                    2 кімнати
+                </option>
+
+                <option value="3">
+                    3 кімнати
+                </option>
+
+                <option value="4">
+                    4 кімнати
+                </option>
+
+                <option value="5">
+                    5 кімнат
+                </option>
+
+            </select>
+
+        </div>
+
+
+        <!-- =========================
+             Площа
+             ========================= -->
+
+        <div class="field">
+
+            <label for="area">
+                Загальна площа, м²
+            </label>
+
+
+            <input
+                type="number"
+                name="area"
+                id="area"
+                min="10"
+                max="1000"
+                step="0.1"
+                placeholder="Наприклад: 80"
+                required
+            >
+
+        </div>
+
+
+        <!-- =========================
+             Поверхи будинку
+             ========================= -->
+
+        <div id="houseFields">
+
+
+            <div class="field">
+
+                <label for="floors">
+                    Кількість поверхів
+                </label>
+
+
+                <select
+                    name="floors"
+                    id="floors"
+                >
+
+                    <option value="1">
+                        1 поверх
+                    </option>
+
+                    <option value="2">
+                        2 поверхи
+                    </option>
+
+                    <option value="3">
+                        3 поверхи
+                    </option>
+
+                </select>
+
+            </div>
+
+
+        </div>
+
+
+        <!-- =========================
+             Матеріали
+             ========================= -->
+
+        <h3>
+            Матеріали
+        </h3>
+
+
+        <!-- Стіни -->
+
+        <div class="field">
+
+            <label for="walls">
+                Матеріал стін
+            </label>
+
+
+            <select
+                name="walls"
+                id="walls"
+                required
+            >
+
+                {% for key, material in materials.walls.items() %}
+
+                    <option value="{{ key }}">
+                        {{ material.name }}
+                        — {{ material.price }} грн/м²
+                    </option>
+
+                {% endfor %}
+
+            </select>
+
+        </div>
+
+
+        <!-- Підлога -->
+
+        <div class="field">
+
+            <label for="floor">
+                Матеріал підлоги
+            </label>
+
+
+            <select
+                name="floor"
+                id="floor"
+                required
+            >
+
+                {% for key, material in materials.floor.items() %}
+
+                    <option value="{{ key }}">
+                        {{ material.name }}
+                        — {{ material.price }} грн/м²
+                    </option>
+
+                {% endfor %}
+
+            </select>
+
+        </div>
+
+
+        <!-- Стеля -->
+
+        <div class="field">
+
+            <label for="ceiling">
+                Матеріал стелі
+            </label>
+
+
+            <select
+                name="ceiling"
+                id="ceiling"
+                required
+            >
+
+                {% for key, material in materials.ceiling.items() %}
+
+                    <option value="{{ key }}">
+                        {{ material.name }}
+                        — {{ material.price }} грн/м²
+                    </option>
+
+                {% endfor %}
+
+            </select>
+
+        </div>
+
+
+        <!-- Дах -->
+
+        <div
+            class="field"
+            id="roofField"
+        >
+
+            <label for="roof">
+                Матеріал даху
+            </label>
+
+
+            <select
+                name="roof"
+                id="roof"
+            >
+
+                {% for key, material in materials.roof.items() %}
+
+                    <option value="{{ key }}">
+                        {{ material.name }}
+                        — {{ material.price }} грн/м²
+                    </option>
+
+                {% endfor %}
+
+            </select>
+
+        </div>
+
+
+        <!-- =========================
+             Кнопка
+             ========================= -->
+
+        <button type="submit">
+
+            Розрахувати вартість
+
+        </button>
+
+
+    </form>
+
+
+</div>
+
+
+<script>
+
+
+function selectType(type) {
+
+
+    const apartmentType =
+        document.getElementById(
+            "apartmentType"
+        );
+
+
+    const houseType =
+        document.getElementById(
+            "houseType"
+        );
+
+
+    const houseFields =
+        document.getElementById(
+            "houseFields"
+        );
+
+
+    const roofField =
+        document.getElementById(
+            "roofField"
+        );
+
+
+    apartmentType.classList.remove(
+        "selected"
+    );
+
+    houseType.classList.remove(
+        "selected"
+    );
+
+
+    if (type === "apartment") {
+
+        apartmentType.classList.add(
+            "selected"
+        );
+
+        houseFields.style.display =
+            "none";
+
+        roofField.style.display =
+            "none";
+
+    }
+
+
+    if (type === "house") {
+
+        houseType.classList.add(
+            "selected"
+        );
+
+        houseFields.style.display =
+            "block";
+
+        roofField.style.display =
+            "block";
+
+    }
+
+}
+
+
+</script>
+
+
+</body>
+
 </html>
+```
