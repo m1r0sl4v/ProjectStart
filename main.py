@@ -24,6 +24,13 @@ supabase: Client = create_client(
 def home():
     return render_template("index.html")
 
+response = (
+    supabase.table("users")
+    .select("*")
+    .execute()
+)
+
+print(response.data[0]["login"])
 
 if __name__ == "__main__":
     app.run(debug=True)
