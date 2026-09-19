@@ -1,657 +1,203 @@
-```html
 <!DOCTYPE html>
-
 <html lang="uk">
 
 <head>
-
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#10263b">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
+    <title>Конструктор житла</title>
 
-    <title>
-        Конструктор житла
-    </title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2310263b'/%3E%3Cpath d='M6 17 16 8l10 9M9 15v10h14V15' stroke='%23f0a81e' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
 
-    <style>
-
-        * {
-            box-sizing: border-box;
-        }
-
-
-        body {
-
-            margin: 0;
-
-            padding: 40px;
-
-            font-family: Arial, sans-serif;
-
-            background: #f2f2f2;
-
-            color: #111;
-        }
-
-
-        .container {
-
-            width: 100%;
-
-            max-width: 700px;
-
-            margin: auto;
-
-            padding: 30px;
-
-            background: white;
-
-            border-radius: 16px;
-
-            box-shadow:
-                0 5px 20px
-                rgba(0, 0, 0, 0.08);
-        }
-
-
-        h1 {
-
-            text-align: center;
-
-            margin-top: 0;
-        }
-
-
-        h3 {
-
-            margin-top: 30px;
-        }
-
-
-        .types {
-
-            display: flex;
-
-            gap: 15px;
-
-            margin-top: 20px;
-        }
-
-
-        .type {
-
-            flex: 1;
-
-            padding: 30px 20px;
-
-            text-align: center;
-
-            border: 2px solid #ddd;
-
-            border-radius: 12px;
-
-            cursor: pointer;
-
-            font-size: 18px;
-        }
-
-
-        .type:hover {
-
-            border-color: #777;
-        }
-
-
-        .type input {
-
-            display: none;
-        }
-
-
-        .type.selected {
-
-            border-color: #111;
-
-            background: #f0f0f0;
-        }
-
-
-        .icon {
-
-            font-size: 40px;
-
-            margin-bottom: 10px;
-        }
-
-
-        .field {
-
-            margin-top: 20px;
-        }
-
-
-        .field label {
-
-            display: block;
-
-            margin-bottom: 8px;
-
-            font-weight: bold;
-        }
-
-
-        input,
-        select {
-
-            width: 100%;
-
-            padding: 13px;
-
-            border: 1px solid #ccc;
-
-            border-radius: 8px;
-
-            font-size: 16px;
-
-            background: white;
-        }
-
-
-        input:focus,
-        select:focus {
-
-            outline: none;
-
-            border-color: #111;
-        }
-
-
-        #houseFields {
-
-            display: none;
-        }
-
-
-        button {
-
-            width: 100%;
-
-            margin-top: 30px;
-
-            padding: 15px;
-
-            border: none;
-
-            border-radius: 8px;
-
-            background: #111;
-
-            color: white;
-
-            font-size: 16px;
-
-            cursor: pointer;
-        }
-
-
-        button:hover {
-
-            background: #333;
-        }
-
-    </style>
-
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
 
 <body>
 
-
-<div class="container">
-
-
-    <h1>
-        Конструктор житла
-    </h1>
-
-
-    <form
-        action="/calculate"
-        method="POST"
-    >
-
-
-        <!-- =========================
-             Місто
-             ========================= -->
-
-        <h3>
-            Місто
-        </h3>
-
-
-        <div class="field">
-
-            <label for="city">
-                Виберіть місто
-            </label>
-
-
-            <select
-                name="city"
-                id="city"
-                required
-            >
-
-                <option value="">
-                    Виберіть місто
-                </option>
-
-
-                {% for key, city in cities.items() %}
-
-                    <option value="{{ key }}">
-                        {{ city.name }}
-                    </option>
-
-                {% endfor %}
-
-            </select>
-
-        </div>
-
-
-        <!-- =========================
-             Тип житла
-             ========================= -->
-
-        <h3>
-            Що ви хочете створити?
-        </h3>
-
-
-        <div class="types">
-
-
-            <label
-                class="type"
-                id="apartmentType"
-            >
-
-                <input
-                    type="radio"
-                    name="building_type"
-                    value="apartment"
-                    onchange="selectType('apartment')"
-                    required
-                >
-
-
-                <div class="icon">
-                    🏢
-                </div>
-
-
-                Квартира
-
-            </label>
-
-
-            <label
-                class="type"
-                id="houseType"
-            >
-
-                <input
-                    type="radio"
-                    name="building_type"
-                    value="house"
-                    onchange="selectType('house')"
-                >
-
-
-                <div class="icon">
-                    🏠
-                </div>
-
-
-                Будинок
-
-            </label>
-
-
-        </div>
-
-
-        <!-- =========================
-             Кімнати
-             ========================= -->
-
-        <div class="field">
-
-            <label for="rooms">
-                Кількість кімнат
-            </label>
-
-
-            <select
-                name="rooms"
-                id="rooms"
-                required
-            >
-
-                <option value="1">
-                    1 кімната
-                </option>
-
-                <option value="2">
-                    2 кімнати
-                </option>
-
-                <option value="3">
-                    3 кімнати
-                </option>
-
-                <option value="4">
-                    4 кімнати
-                </option>
-
-                <option value="5">
-                    5 кімнат
-                </option>
-
-            </select>
-
-        </div>
-
-
-        <!-- =========================
-             Площа
-             ========================= -->
-
-        <div class="field">
-
-            <label for="area">
-                Загальна площа, м²
-            </label>
-
-
-            <input
-                type="number"
-                name="area"
-                id="area"
-                min="10"
-                max="1000"
-                step="0.1"
-                placeholder="Наприклад: 80"
-                required
-            >
-
-        </div>
-
-
-        <!-- =========================
-             Поверхи будинку
-             ========================= -->
-
-        <div id="houseFields">
-
-
-            <div class="field">
-
-                <label for="floors">
-                    Кількість поверхів
-                </label>
-
-
-                <select
-                    name="floors"
-                    id="floors"
-                >
-
-                    <option value="1">
-                        1 поверх
-                    </option>
-
-                    <option value="2">
-                        2 поверхи
-                    </option>
-
-                    <option value="3">
-                        3 поверхи
-                    </option>
-
-                </select>
-
-            </div>
-
-
-        </div>
-
-
-        <!-- =========================
-             Матеріали
-             ========================= -->
-
-        <h3>
-            Матеріали
-        </h3>
-
-
-        <!-- Стіни -->
-
-        <div class="field">
-
-            <label for="walls">
-                Матеріал стін
-            </label>
-
-
-            <select
-                name="walls"
-                id="walls"
-                required
-            >
-
-                {% for key, material in materials.walls.items() %}
-
-                    <option value="{{ key }}">
-                        {{ material.name }}
-                        — {{ material.price }} грн/м²
-                    </option>
-
-                {% endfor %}
-
-            </select>
-
-        </div>
-
-
-        <!-- Підлога -->
-
-        <div class="field">
-
-            <label for="floor">
-                Матеріал підлоги
-            </label>
-
-
-            <select
-                name="floor"
-                id="floor"
-                required
-            >
-
-                {% for key, material in materials.floor.items() %}
-
-                    <option value="{{ key }}">
-                        {{ material.name }}
-                        — {{ material.price }} грн/м²
-                    </option>
-
-                {% endfor %}
-
-            </select>
-
-        </div>
-
-
-        <!-- Стеля -->
-
-        <div class="field">
-
-            <label for="ceiling">
-                Матеріал стелі
-            </label>
-
-
-            <select
-                name="ceiling"
-                id="ceiling"
-                required
-            >
-
-                {% for key, material in materials.ceiling.items() %}
-
-                    <option value="{{ key }}">
-                        {{ material.name }}
-                        — {{ material.price }} грн/м²
-                    </option>
-
-                {% endfor %}
-
-            </select>
-
-        </div>
-
-
-        <!-- Дах -->
-
-        <div
-            class="field"
-            id="roofField"
-        >
-
-            <label for="roof">
-                Матеріал даху
-            </label>
-
-
-            <select
-                name="roof"
-                id="roof"
-            >
-
-                {% for key, material in materials.roof.items() %}
-
-                    <option value="{{ key }}">
-                        {{ material.name }}
-                        — {{ material.price }} грн/м²
-                    </option>
-
-                {% endfor %}
-
-            </select>
-
-        </div>
-
-
-        <!-- =========================
-             Кнопка
-             ========================= -->
-
-        <button type="submit">
-
-            Розрахувати вартість
-
-        </button>
-
-
-    </form>
-
-
+{% set cur_type = initial.building_type if initial.building_type in catalog else 'apartment' %}
+{% set cur_rooms = (initial.rooms or '2')|string %}
+{% set cur_floors = (initial.floors or '1')|string %}
+
+<header class="top">
+    <a class="brand" href="{{ url_for('index') }}">
+        <span class="brand-mark">
+            <svg width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 17 16 8l10 9M9 15v10h14V15"/>
+            </svg>
+        </span>
+        <span class="brand-name">Конструктор житла</span>
+    </a>
+</header>
+
+<div class="intro">
+    <h1>Порахуйте вартість житла за матеріалами</h1>
+    <p>Оберіть місто, тип житла та матеріали — підсумок праворуч оновлюється одразу.</p>
 </div>
 
+<form class="layout" id="calc" action="{{ url_for('calculate_view') }}" method="post">
+
+    <div class="sheet">
+
+        {% if errors %}
+        <div class="alert" role="alert">
+            <strong>Перевірте, будь ласка, форму</strong>
+            <ul>
+                {% for error in errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
+        </div>
+        {% endif %}
+
+        <!-- Місто -->
+        <section class="row">
+            <div class="row-head">
+                <h2>Місто</h2>
+                <p>Ціни на матеріали й роботи залежать від регіону.</p>
+            </div>
+            <div class="fields">
+                <div>
+                    <label class="field-label" for="city">Виберіть місто</label>
+                    <select name="city" id="city" required>
+                        <option value="">Виберіть місто</option>
+                        {% for key, city in cities.items() %}
+                        <option value="{{ key }}" {% if initial.city == key %}selected{% endif %}>{{ city.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </section>
+
+        <!-- Тип житла -->
+        <section class="row">
+            <div class="row-head">
+                <h2>Що ви хочете створити?</h2>
+                <p>Від типу залежить набір матеріалів.</p>
+            </div>
+            <div class="fields">
+                <div class="tiles">
+
+                    <label class="tile">
+                        <input type="radio" name="building_type" value="apartment" {% if cur_type == 'apartment' %}checked{% endif %} required>
+                        <span class="tile-body">
+                            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <rect x="10" y="6" width="28" height="36" rx="2"/>
+                                <path d="M17 14h4M27 14h4M17 22h4M27 22h4M17 30h4M27 30h4"/>
+                                <path d="M21 42v-6h6v6"/>
+                            </svg>
+                            <span>
+                                <span class="tile-name">Квартира</span>
+                                <span class="tile-desc">{{ catalog.apartment.summary }}</span>
+                            </span>
+                        </span>
+                    </label>
+
+                    <label class="tile">
+                        <input type="radio" name="building_type" value="house" {% if cur_type == 'house' %}checked{% endif %}>
+                        <span class="tile-body">
+                            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M6 22 24 7l18 15"/>
+                                <path d="M10 19v23h28V19"/>
+                                <path d="M20 42V30h8v12"/>
+                            </svg>
+                            <span>
+                                <span class="tile-name">Будинок</span>
+                                <span class="tile-desc">{{ catalog.house.summary }}</span>
+                            </span>
+                        </span>
+                    </label>
+
+                </div>
+            </div>
+        </section>
+
+        <!-- Параметри -->
+        <section class="row">
+            <div class="row-head">
+                <h2>Параметри</h2>
+                <p>Кількість кімнат і площа впливають на обсяг матеріалів.</p>
+            </div>
+            <div class="fields">
+
+                <div>
+                    <span class="field-label" id="rooms-label">Кількість кімнат</span>
+                    <div class="pills" role="group" aria-labelledby="rooms-label">
+                        {% for r in range(1, 6) %}
+                        <label class="pill">
+                            <input type="radio" name="rooms" value="{{ r }}" {% if cur_rooms == r|string %}checked{% endif %}>
+                            <span>{{ r }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+                <div>
+                    <label class="field-label" for="area">Загальна площа</label>
+                    <div class="input-suffix">
+                        <input type="number" name="area" id="area" min="10" max="1000" step="0.1"
+                               inputmode="decimal" placeholder="Наприклад: 80"
+                               value="{{ initial.area or '' }}" required>
+                        <span class="suffix">м²</span>
+                    </div>
+                    <p class="hint" id="areaHint"></p>
+                </div>
+
+                <div id="floorsRow" {% if cur_type != 'house' %}hidden{% endif %}>
+                    <span class="field-label" id="floors-label">Кількість поверхів</span>
+                    <div class="pills" role="group" aria-labelledby="floors-label">
+                        {% for f in range(1, 4) %}
+                        <label class="pill">
+                            <input type="radio" name="floors" value="{{ f }}" {% if cur_floors == f|string %}checked{% endif %} {% if cur_type != 'house' %}disabled{% endif %}>
+                            <span>{{ f }}</span>
+                        </label>
+                        {% endfor %}
+                    </div>
+                </div>
+
+            </div>
+        </section>
+
+        <!-- Матеріали (наповнюються скриптом залежно від типу житла) -->
+        <section class="row">
+            <div class="row-head">
+                <h2>Матеріали</h2>
+                <p id="materialsHint"></p>
+            </div>
+            <div id="materials"></div>
+        </section>
+
+    </div>
+
+    <!-- Живий підсумок -->
+    <aside class="summary">
+        <p class="summary-label">Орієнтовна вартість</p>
+        <p class="summary-total">
+            <span id="total">—</span><span class="cur" id="totalCur" hidden>грн</span>
+        </p>
+        <p class="summary-per" id="perM2" aria-live="polite">Виберіть місто та вкажіть площу.</p>
+
+        <div class="bar" id="bar" aria-hidden="true" hidden></div>
+        <ul class="legend" id="legend"></ul>
+
+        <button type="submit" class="btn btn-amber btn-block">Детальний розрахунок</button>
+        <p class="fine">Сума орієнтовна: остаточна ціна залежить від підрядника, сезону та стану приміщення.</p>
+    </aside>
+
+</form>
 
 <script>
-
-
-function selectType(type) {
-
-
-    const apartmentType =
-        document.getElementById(
-            "apartmentType"
-        );
-
-
-    const houseType =
-        document.getElementById(
-            "houseType"
-        );
-
-
-    const houseFields =
-        document.getElementById(
-            "houseFields"
-        );
-
-
-    const roofField =
-        document.getElementById(
-            "roofField"
-        );
-
-
-    apartmentType.classList.remove(
-        "selected"
-    );
-
-    houseType.classList.remove(
-        "selected"
-    );
-
-
-    if (type === "apartment") {
-
-        apartmentType.classList.add(
-            "selected"
-        );
-
-        houseFields.style.display =
-            "none";
-
-        roofField.style.display =
-            "none";
-
-    }
-
-
-    if (type === "house") {
-
-        houseType.classList.add(
-            "selected"
-        );
-
-        houseFields.style.display =
-            "block";
-
-        roofField.style.display =
-            "block";
-
-    }
-
-}
-
-
+    window.APP = {
+        catalog: {{ catalog|tojson }},
+        estimateUrl: "{{ url_for('estimate_view') }}"
+    };
 </script>
-
+<script src="{{ url_for('static', filename='app.js') }}"></script>
 
 </body>
 
 </html>
-```

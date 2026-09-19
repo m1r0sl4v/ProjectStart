@@ -1,387 +1,164 @@
-```html
 <!DOCTYPE html>
-
 <html lang="uk">
 
 <head>
-
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#10263b">
 
-    <meta
-        name="viewport"
-        content="width=device-width, initial-scale=1.0"
-    >
+    <title>Розрахунок вартості — Конструктор житла</title>
 
-    <title>
-        Результат
-    </title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2310263b'/%3E%3Cpath d='M6 17 16 8l10 9M9 15v10h14V15' stroke='%23f0a81e' stroke-width='2.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
 
-    <style>
-
-        * {
-            box-sizing: border-box;
-        }
-
-
-        body {
-
-            margin: 0;
-
-            padding: 40px;
-
-            font-family: Arial, sans-serif;
-
-            background: #f2f2f2;
-
-            color: #111;
-        }
-
-
-        .container {
-
-            width: 100%;
-
-            max-width: 700px;
-
-            margin: auto;
-
-            padding: 30px;
-
-            background: white;
-
-            border-radius: 16px;
-
-            box-shadow:
-                0 5px 20px
-                rgba(0, 0, 0, 0.08);
-        }
-
-
-        h1 {
-
-            text-align: center;
-
-            margin-top: 0;
-        }
-
-
-        .info {
-
-            display: flex;
-
-            justify-content: space-between;
-
-            align-items: center;
-
-            margin-top: 12px;
-
-            padding: 16px;
-
-            background: #f5f5f5;
-
-            border-radius: 10px;
-        }
-
-
-        .materials {
-
-            margin-top: 25px;
-        }
-
-
-        .material {
-
-            padding: 15px;
-
-            margin-top: 10px;
-
-            background: #f5f5f5;
-
-            border-radius: 10px;
-        }
-
-
-        .price {
-
-            margin-top: 30px;
-
-            padding: 25px;
-
-            background: #111;
-
-            color: white;
-
-            border-radius: 12px;
-
-            text-align: center;
-        }
-
-
-        .price-title {
-
-            font-size: 15px;
-
-            margin-bottom: 10px;
-        }
-
-
-        .price-value {
-
-            font-size: 30px;
-
-            font-weight: bold;
-        }
-
-
-        .back {
-
-            display: block;
-
-            margin-top: 20px;
-
-            padding: 15px;
-
-            text-align: center;
-
-            background: #ddd;
-
-            color: #111;
-
-            text-decoration: none;
-
-            border-radius: 8px;
-        }
-
-
-        .back:hover {
-
-            background: #ccc;
-        }
-
-    </style>
-
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-
 
 <body>
 
-
-<div class="container">
-
-
-    <h1>
-        Результат
-    </h1>
-
-
-    <!-- Місто -->
-
-    <div class="info">
-
-        <span>
-            Місто
+<header class="top">
+    <a class="brand" href="{{ url_for('index') }}">
+        <span class="brand-mark">
+            <svg width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M6 17 16 8l10 9M9 15v10h14V15"/>
+            </svg>
         </span>
-
-        <strong>
-            {{ city_name }}
-        </strong>
-
-    </div>
-
-
-    <!-- Тип -->
-
-    <div class="info">
-
-        <span>
-            Тип житла
-        </span>
-
-
-        <strong>
-
-            {% if building_type == "house" %}
-
-                🏠 Будинок
-
-            {% else %}
-
-                🏢 Квартира
-
-            {% endif %}
-
-        </strong>
-
-    </div>
-
-
-    <!-- Кімнати -->
-
-    <div class="info">
-
-        <span>
-            Кількість кімнат
-        </span>
-
-        <strong>
-            {{ rooms }}
-        </strong>
-
-    </div>
-
-
-    <!-- Площа -->
-
-    <div class="info">
-
-        <span>
-            Загальна площа
-        </span>
-
-        <strong>
-            {{ area }} м²
-        </strong>
-
-    </div>
-
-
-    <!-- Поверхи -->
-
-    {% if building_type == "house" %}
-
-        <div class="info">
-
-            <span>
-                Кількість поверхів
-            </span>
-
-            <strong>
-                {{ floors }}
-            </strong>
-
-        </div>
-
-    {% endif %}
-
-
-    <!-- =========================
-         Матеріали
-         ========================= -->
-
-    <div class="materials">
-
-        <h3>
-            Вибрані матеріали
-        </h3>
-
-
-        <div class="material">
-
-            <strong>
-                Стіни:
-            </strong>
-
-            {{ walls_name }}
-
-        </div>
-
-
-        <div class="material">
-
-            <strong>
-                Підлога:
-            </strong>
-
-            {{ floor_name }}
-
-        </div>
-
-
-        <div class="material">
-
-            <strong>
-                Стеля:
-            </strong>
-
-            {{ ceiling_name }}
-
-        </div>
-
-
-        {% if building_type == "house" %}
-
-            <div class="material">
-
-                <strong>
-                    Дах:
-                </strong>
-
-                {{ roof_name }}
-
-            </div>
-
-        {% endif %}
-
-    </div>
-
-
-    <!-- Ціна за м² -->
-
-    <div class="info">
-
-        <span>
-            Орієнтовна ціна за 1 м²
-        </span>
-
-
-        <strong>
-
-            {{ "{:,.0f}".format(price_per_m2) }}
-            грн
-
-        </strong>
-
-    </div>
-
-
-    <!-- Загальна ціна -->
-
-    <div class="price">
-
-        <div class="price-title">
-
-            Орієнтовна вартість
-
-        </div>
-
-
-        <div class="price-value">
-
-            {{ "{:,.0f}".format(total_price) }}
-            грн
-
-        </div>
-
-    </div>
-
-
-    <!-- Назад -->
-
-    <a
-        class="back"
-        href="/"
-    >
-
-        ← Змінити параметри
-
+        <span class="brand-name">Конструктор житла</span>
     </a>
+</header>
 
+<main class="result">
 
-</div>
+    <!-- Підсумок -->
+    <section class="hero">
+        <p class="summary-label">Орієнтовна вартість</p>
+        <h1 class="hero-total">{{ calc.total|money }}<span class="cur">грн</span></h1>
+        <p class="summary-per">Близько {{ calc.per_m2|money }} грн за м²</p>
 
+        <ul class="meta">
+            <li>{{ calc.type_title }}</li>
+            <li>{{ calc.city_name }}</li>
+            <li>{{ calc.area|dec }} м²</li>
+            <li>{{ calc.rooms_label }}</li>
+            {% if calc.floors_label %}<li>{{ calc.floors_label }}</li>{% endif %}
+        </ul>
+
+        <div class="bar" aria-hidden="true">
+            {% for row in calc.rows %}
+            <span class="seg seg-{{ loop.index0 }}" style="flex-grow: {{ row.cost }}"></span>
+            {% endfor %}
+            <span class="seg seg-work" style="flex-grow: {{ calc.work_cost }}"></span>
+        </div>
+
+        <ul class="legend">
+            {% for row in calc.rows %}
+            <li>
+                <span class="swatch seg-{{ loop.index0 }}"></span>
+                <span class="legend-name">{{ row.label }}</span>
+                <span class="legend-sum">{{ row.cost|money }} грн</span>
+            </li>
+            {% endfor %}
+            <li>
+                <span class="swatch seg-work"></span>
+                <span class="legend-name">Роботи</span>
+                <span class="legend-sum">{{ calc.work_cost|money }} грн</span>
+            </li>
+        </ul>
+    </section>
+
+    <!-- Таблиця -->
+    <section class="sheet block">
+        <h2>З чого складається сума</h2>
+
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Позиція</th>
+                    <th class="num col-detail">Площа</th>
+                    <th class="num col-detail">Ціна за м²</th>
+                    <th class="num">Вартість</th>
+                    <th class="num col-share">Частка</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in calc.rows %}
+                <tr>
+                    <td>
+                        <div class="cell-flex">
+                            <span class="swatch seg-{{ loop.index0 }}"></span>
+                            <div>
+                                <strong>{{ row.label }}</strong>
+                                <span class="sub">{{ row.material }}</span>
+                                <span class="sub sub-mobile">{{ row.area|dec }} м² × {{ row.unit_price|money }} грн/м²</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="num col-detail">{{ row.area|dec }} м²</td>
+                    <td class="num col-detail">{{ row.unit_price|money }} грн</td>
+                    <td class="num">{{ row.cost|money }} грн</td>
+                    <td class="num col-share">{{ row.share }}%</td>
+                </tr>
+                {% endfor %}
+                <tr>
+                    <td>
+                        <div class="cell-flex">
+                            <span class="swatch seg-work"></span>
+                            <div>
+                                <strong>Роботи</strong>
+                                <span class="sub">{{ calc.work_pct }}% від вартості матеріалів</span>
+                            </div>
+                        </div>
+                    </td>
+                    <td class="num col-detail">—</td>
+                    <td class="num col-detail">—</td>
+                    <td class="num">{{ calc.work_cost|money }} грн</td>
+                    <td class="num col-share">{{ calc.work_share }}%</td>
+                </tr>
+            </tbody>
+            <tfoot>
+                <tr>
+                    <td>Разом</td>
+                    <td class="col-detail"></td>
+                    <td class="col-detail"></td>
+                    <td class="num">{{ calc.total|money }} грн</td>
+                    <td class="col-share"></td>
+                </tr>
+            </tfoot>
+        </table>
+    </section>
+
+    <!-- Як рахували -->
+    <section class="sheet block">
+        <h2>Як ми рахували</h2>
+        <ul class="notes">
+            <li>Ціни враховують коефіцієнт міста {{ calc.city_name }}: ×{{ ('%.2f'|format(calc.city_coef))|replace('.', ',') }}.</li>
+            {% if calc.building_type == 'apartment' %}
+            <li>Площа стін розрахункова: вона зростає разом із кількістю кімнат, бо додаються перегородки.</li>
+            <li>Не враховано: вікна й двері, електрику, сантехніку, кухню та меблі.</li>
+            {% else %}
+            <li>Стіни — це зовнішні стіни з урахуванням поверхів і внутрішні перегородки. Площа даху враховує нахил і звіси.</li>
+            <li>Не враховано: фундамент, вікна й двері, інженерні системи, зовнішнє оздоблення та благоустрій.</li>
+            {% endif %}
+            <li>Ціни на матеріали орієнтовні й можуть відрізнятися залежно від постачальника та сезону.</li>
+        </ul>
+    </section>
+
+    <div class="actions">
+        <form action="{{ url_for('edit_view') }}" method="post">
+            {% for name, value in calc.form.items() %}
+            <input type="hidden" name="{{ name }}" value="{{ value }}">
+            {% endfor %}
+            <button type="submit" class="btn btn-solid">Змінити параметри</button>
+        </form>
+        <a class="btn btn-ghost" href="{{ url_for('index') }}">Новий розрахунок</a>
+        <button type="button" class="btn btn-ghost" onclick="window.print()">Роздрукувати</button>
+    </div>
+
+</main>
 
 </body>
 
 </html>
-```
