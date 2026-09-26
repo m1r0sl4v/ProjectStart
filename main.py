@@ -19,16 +19,21 @@ except ImportError:
     print("Flask не встановлено. Встановлюю, зачекайте...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
 
-from flask import Flask, jsonify, redirect, render_template_string, request, url_for
+from flask import Flask, Response, jsonify, redirect, render_template_string, request, url_for
 
 app = Flask(__name__)
 
 
 # ---------------------------------------------------------------------------
-# ДАНІ (тут можна змінювати міста, матеріали та ціни)
+# ДАНІ ТА КУРСИ ВАЛЮТ
 # ---------------------------------------------------------------------------
 
-# coef — регіональний коефіцієнт до всіх цін
+RATES = {
+    "UAH": 1.0,
+    "USD": 41.5,
+    "EUR": 45.0
+}
+
 CITIES = {
     "kyiv": {"name": "Київ", "coef": 1.25},
     "lviv": {"name": "Львів", "coef": 1.10},
@@ -42,12 +47,9 @@ CITIES = {
 
 
 def _opt(name, price, note):
-    """Один матеріал: назва, ціна за м² (грн) і коротке пояснення."""
     return {"name": name, "price": price, "note": note}
 
 
-# Для квартири — внутрішнє оздоблення, для будинку — конструкції та дах.
-# Матеріали в кожній групі впорядковані від дешевших до дорожчих.
 CATALOG = {
     "apartment": {
         "title": "Квартира",
@@ -55,7 +57,7 @@ CATALOG = {
         "materials_hint": "Внутрішнє оздоблення приміщень",
         "area_limits": (15, 300),
         "area_example": 60,
-        "work_share": 0.35,  # вартість робіт як частка від вартості матеріалів
+        "work_share": 0.35,
         "groups": {
             "walls": {
                 "title": "Матеріал стін",
@@ -145,15 +147,14 @@ CATALOG = {
     },
 }
 
-CEILING_HEIGHT = 2.7  # висота поверху, м
+CEILING_HEIGHT = 2.7
 
 
 # ---------------------------------------------------------------------------
-# ДОПОМІЖНІ ФУНКЦІЇ
+# ДОПОМІЖНІ ФУНКЦІЇ ТА ОБЧИСЛЕННЯ
 # ---------------------------------------------------------------------------
 
 def plural(n, forms):
-    """Правильна форма слова: plural(3, ('кімната', 'кімнати', 'кімнат'))."""
     n = abs(int(n))
     if 11 <= n % 100 <= 14:
         return forms[2]
@@ -174,7 +175,6 @@ def to_int(value, low, high):
 
 
 def parse_params(data):
-    """Перевіряє дані форми. Повертає (params, errors)."""
     errors = []
     params = {}
 
@@ -228,28 +228,89 @@ def parse_params(data):
 
 
 def surfaces(btype, area, rooms, floors):
-    """Розрахункові площі поверхонь у м²."""
     if btype == "apartment":
-        # стіни разом з перегородками: чим більше кімнат, тим більше стін
         return {
             "walls": area * (2.2 + 0.15 * rooms),
             "floor": area,
             "ceiling": area,
         }
 
-    footprint = area / floors  # площа забудови
+    footprint = area / floors
     outer_walls = 4 * sqrt(footprint) * CEILING_HEIGHT * floors
     partitions = area * (0.3 + 0.1 * rooms)
     return {
         "walls": outer_walls + partitions,
         "floor": area,
         "ceiling": area,
-        "roof": footprint * 1.35,  # з урахуванням нахилу та звісів
+        "roof": footprint * 1.35,
     }
 
 
+def calculate_mortgage(total_price, years=20, rate=7.0, down_payment_pct=20):
+    """Обчислення іпотечного платежу ("єОселя")."""
+    down_payment = total_price * (down_payment_pct / 100)
+    loan_amount = total_price - down_payment
+    monthly_rate = (rate / 100) / 12
+    n_payments = years * 12
+
+    if monthly_rate > 0:
+        monthly_payment = loan_amount * (monthly_rate * (1 + monthly_rate) ** n_payments) / (((1 + monthly_rate) ** n_payments) - 1)
+    else:
+        monthly_payment = loan_amount / n_payments
+
+    return {
+        "down_payment": round(down_payment),
+        "loan_amount": round(loan_amount),
+        "monthly_payment": round(monthly_payment),
+        "years": years,
+        "rate": rate
+    }
+
+
+def calculate_range(params):
+    btype = params["building_type"]
+    spec = CATALOG[btype]
+    city = CITIES[params["city"]]
+    area = params["area"]
+    rooms = params["rooms"]
+    floors = params["floors"]
+    areas = surfaces(btype, area, rooms, floors)
+
+    min_mats = 0
+    max_mats = 0
+
+    for gkey, group in spec["groups"].items():
+        prices = [opt["price"] * city["coef"] for opt in group["options"].values()]
+        min_mats += areas[gkey] * min(prices)
+        max_mats += areas[gkey] * max(prices)
+
+    min_total = round(min_mats * (1 + spec["work_share"]))
+    max_total = round(max_mats * (1 + spec["work_share"]))
+
+    return {
+        "min_total": min_total,
+        "max_total": max_total,
+        "min_per_m2": round(min_total / area),
+        "max_per_m2": round(max_total / area),
+    }
+
+
+def estimate_timeline(params):
+    btype = params["building_type"]
+    area = params["area"]
+    floors = params.get("floors", 1)
+
+    if btype == "apartment":
+        base_days = 20 + area * 0.4 + params["rooms"] * 3
+    else:
+        base_days = 60 + area * 0.8 + floors * 15
+
+    days = round(base_days)
+    months = round(days / 30, 1)
+    return {"days": days, "months": months}
+
+
 def calculate(params):
-    """Рахує вартість за перевіреними параметрами."""
     btype = params["building_type"]
     spec = CATALOG[btype]
     city = CITIES[params["city"]]
@@ -299,6 +360,8 @@ def calculate(params):
         "city_name": city["name"],
         "city_coef": city["coef"],
         "area": area,
+        "rooms": rooms,
+        "floors": floors,
         "rooms_label": f"{rooms} {plural(rooms, ('кімната', 'кімнати', 'кімнат'))}",
         "floors_label": (
             f"{floors} {plural(floors, ('поверх', 'поверхи', 'поверхів'))}"
@@ -312,6 +375,11 @@ def calculate(params):
         "work_share": round(work_cost / total * 100),
         "total": total,
         "per_m2": round(total / area),
+        "usd_total": round(total / RATES["USD"]),
+        "eur_total": round(total / RATES["EUR"]),
+        "range": calculate_range(params),
+        "timeline": estimate_timeline(params),
+        "mortgage": calculate_mortgage(total)
     }
 
 
@@ -321,14 +389,15 @@ def calculate(params):
 
 @app.template_filter("money")
 def money(value):
-    """1234567 -> '1 234 567' (з нерозривними пробілами)."""
     return f"{int(round(value)):,}".replace(",", "\u00a0")
 
 
 @app.template_filter("dec")
 def dec(value):
-    """60.0 -> '60', 60.5 -> '60,5'."""
-    text = f"{value:.1f}".rstrip("0").rstrip(".")
+    if isinstance(value, (int, float)):
+        text = f"{value:g}"
+    else:
+        text = str(value)
     return text.replace(".", ",")
 
 
@@ -353,7 +422,6 @@ def index():
 
 @app.route("/estimate", methods=["POST"])
 def estimate_view():
-    """Швидкий розрахунок для живого підсумку на головній сторінці."""
     params, errors = parse_params(request.form)
     if errors:
         return jsonify(ok=False, errors=errors)
@@ -368,18 +436,74 @@ def calculate_view():
     params, errors = parse_params(request.form)
     if errors:
         return render_index(request.form.to_dict(), errors), 400
-    return render_template_string(RESULT_HTML, calc=calculate(params))
+    return render_template_string(RESULT_HTML, calc=calculate(params), rates=RATES)
 
 
 @app.route("/edit", methods=["POST"])
 def edit_view():
-    """Повертає до форми зі збереженими значеннями."""
     return render_index(request.form.to_dict(), [])
 
 
+@app.route("/download_txt", methods=["POST"])
+def download_txt():
+    params, errors = parse_params(request.form)
+    if errors:
+        return redirect(url_for("index"))
+
+    calc = calculate(params)
+    lines = [
+        "==================================================",
+        "            КОШТОРИС БУДІВНИЦТВА / РЕМОНТУ        ",
+        "==================================================",
+        f"Об'єкт: {calc['type_title']}",
+        f"Місто: {calc['city_name']}",
+        f"Площа: {calc['area']} м² ({calc['rooms_label']})",
+    ]
+    if calc.get("floors_label"):
+        lines.append(f"Поверхів: {calc['floors_label']}")
+
+    lines.extend(
+        [
+            f"Орієнтовний термін робіт: ~{calc['timeline']['days']} днів (~{calc['timeline']['months']} міс.)",
+            "--------------------------------------------------",
+            "ДЕТАЛІЗАЦІЯ ВИТРАТ:",
+        ]
+    )
+
+    for row in calc["rows"]:
+        lines.append(
+            f"• {row['label']} ({row['material']}): {row['area']} м² × {row['unit_price']} грн = {row['cost']:,} грн"
+        )
+
+    lines.extend(
+        [
+            f"• Роботи ({calc['work_pct']}%): {calc['work_cost']:,} грн",
+            "--------------------------------------------------",
+            f"ЗАГАЛЬНА ВАРТІСТЬ: {calc['total']:,} грн  (~${calc['usd_total']:,} USD / ~€{calc['eur_total']:,} EUR)",
+            f"Вартість за 1 м²: {calc['per_m2']:,} грн",
+            "--------------------------------------------------",
+            "ОЦІНКА ІПОТЕКИ (єОселя 7% на 20 років):",
+            f"• Перший внесок (20%): {calc['mortgage']['down_payment']:,} грн",
+            f"• Щомісячний платіж:  {calc['mortgage']['monthly_payment']:,} грн/міс",
+            "--------------------------------------------------",
+            "ВИЛКА ЦІН ДЛЯ ЦЬОГО ОБ'ЄКТА:",
+            f"• Бюджетний варіант: {calc['range']['min_total']:,} грн",
+            f"• Обраний варіант:   {calc['total']:,} грн",
+            f"• Преміум варіант:   {calc['range']['max_total']:,} грн",
+            "==================================================",
+        ]
+    )
+
+    content = "\n".join(lines).replace(",", " ")
+    return Response(
+        content,
+        mimetype="text/plain; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=koshtorys.txt"},
+    )
+
+
 # ---------------------------------------------------------------------------
-# ШАБЛОНИ СТОРІНОК (HTML + CSS + JS)
-# Це звичайні рядки Python: сюди можна вносити правки в HTML, CSS і JS.
+# ШАБЛОНИ СТОРІНОК
 # ---------------------------------------------------------------------------
 
 INDEX_HTML = r"""<!DOCTYPE html>
@@ -396,891 +520,92 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 
     <style>
 {% raw %}
-/* ==========================================================================
-   Конструктор житла
-   ========================================================================== */
-
 :root {
-    --paper: #edf1f4;
-    --sheet: #ffffff;
-    --ink: #10263b;
-    --blue: #1b4f8a;
-    --blue-soft: #e4eef8;
-    --amber: #f0a81e;
-    --line: #d3dce5;
-    --muted: #5a6d80;
-    --focus: #2f7fe0;
-    --danger: #b3261e;
-
-    --font-body: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    --font-display: "Unbounded", "Onest", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-}
-
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-}
-
-[hidden] {
-    display: none !important;
-}
-
-html {
-    -webkit-text-size-adjust: 100%;
-}
-
-body {
-    margin: 0;
-    background: var(--paper);
-    color: var(--ink);
-    font-family: var(--font-body);
-    font-size: 16px;
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-}
-
-h1, h2, h3, p, ul {
-    margin: 0;
-}
-
-button, input, select {
-    font: inherit;
-    color: inherit;
-}
-
-:focus-visible {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-}
-
-/* --- Шапка ---------------------------------------------------------------- */
-
-.top {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 28px 24px 0;
-}
-
-.brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    color: inherit;
-    text-decoration: none;
-}
-
-.brand-mark {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    background: var(--ink);
-    color: var(--amber);
-}
-
-.brand-name {
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: 1.05rem;
-    letter-spacing: -0.01em;
-}
-
-.intro {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 36px 24px 0;
-}
-
-.intro h1 {
-    max-width: 22ch;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(1.6rem, 3.4vw, 2.5rem);
-    line-height: 1.15;
-    letter-spacing: -0.02em;
-}
-
-.intro p {
-    max-width: 52ch;
-    margin-top: 14px;
-    color: var(--muted);
-    font-size: 1.05rem;
-}
-
-/* --- Основна сітка ------------------------------------------------------- */
-
-.layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 28px;
-    align-items: start;
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 28px 24px 80px;
-}
-
-.sheet {
-    background: var(--sheet);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-}
-
-.alert {
-    margin: 24px 32px 0;
-    padding: 14px 18px;
-    border: 1.5px solid var(--danger);
-    border-radius: 12px;
-    background: #fdecea;
-    color: #5f1410;
-}
-
-.alert ul {
-    margin-top: 6px;
-    padding-left: 20px;
-}
-
-/* --- Рядки форми: назва зліва, поля справа ------------------------------- */
-
-.row {
-    display: grid;
-    grid-template-columns: 170px minmax(0, 1fr);
-    gap: 28px;
-    padding: 32px;
-}
-
-.row + .row {
-    border-top: 1px solid var(--line);
-}
-
-.row-head h2 {
-    font-size: 1.1rem;
-    font-weight: 700;
-    line-height: 1.3;
-}
-
-.row-head p {
-    margin-top: 6px;
-    color: var(--muted);
-    font-size: 0.9rem;
-}
-
-.fields {
-    display: grid;
-    gap: 24px;
-}
-
-.field-label {
-    display: block;
-    margin-bottom: 10px;
-    font-weight: 600;
-    font-size: 0.95rem;
-}
-
-.hint {
-    margin-top: 8px;
-    color: var(--muted);
-    font-size: 0.85rem;
-}
-
-/* --- Поля вводу ---------------------------------------------------------- */
-
-select,
-input[type="number"] {
-    width: 100%;
-    height: 50px;
-    padding: 0 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    font-size: 1rem;
-}
-
-select {
-    appearance: none;
-    padding-right: 42px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9' fill='none'%3E%3Cpath d='M1 1.5 7 7.5l6-6' stroke='%2310263b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 16px center;
-    cursor: pointer;
-}
-
-select:hover,
-input[type="number"]:hover {
-    border-color: #9fb0c1;
-}
-
-select:focus,
-input[type="number"]:focus {
-    outline: none;
-    border-color: var(--blue);
-    box-shadow: 0 0 0 3px rgba(47, 127, 224, 0.25);
-}
-
-.input-suffix {
-    position: relative;
-    max-width: 260px;
-}
-
-.input-suffix input {
-    padding-right: 48px;
-}
-
-.suffix {
-    position: absolute;
-    top: 50%;
-    right: 16px;
-    transform: translateY(-50%);
-    color: var(--muted);
-    pointer-events: none;
-}
-
-/* Приховуємо нативні радіокнопки, лишаючи їх доступними з клавіатури */
-.tile input,
-.pill input,
-.chip input {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    pointer-events: none;
-}
-
-.tile,
-.pill,
-.chip {
-    position: relative;
-    display: block;
-    cursor: pointer;
-}
-
-/* --- Тип житла ----------------------------------------------------------- */
-
-.tiles {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-.tile-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    height: 100%;
-    padding: 18px;
-    border: 1.5px solid var(--line);
-    border-radius: 16px;
-    background: #fff;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.tile-body svg {
-    width: 44px;
-    height: 44px;
-    color: var(--blue);
-}
-
-.tile-name {
-    display: block;
-    font-size: 1.15rem;
-    font-weight: 700;
-}
-
-.tile-desc {
-    display: block;
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.88rem;
-    line-height: 1.35;
-}
-
-.tile:hover input:not(:checked) + .tile-body {
-    border-color: var(--blue);
-}
-
-.tile input:checked + .tile-body {
-    border-color: var(--ink);
-    background: var(--ink);
-    color: #fff;
-}
-
-.tile input:checked + .tile-body svg {
-    color: var(--amber);
-}
-
-.tile input:checked + .tile-body .tile-desc {
-    color: rgba(255, 255, 255, 0.78);
-}
-
-.tile input:focus-visible + .tile-body,
-.pill input:focus-visible + span,
-.chip input:focus-visible + .chip-body {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-}
-
-/* --- Кімнати та поверхи -------------------------------------------------- */
-
-.pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.pill span {
-    display: grid;
-    place-items: center;
-    min-width: 52px;
-    height: 46px;
-    padding: 0 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    font-weight: 600;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.pill:hover input:not(:checked) + span {
-    border-color: var(--blue);
-}
-
-.pill input:checked + span {
-    border-color: var(--blue);
-    background: var(--blue);
-    color: #fff;
-}
-
-/* --- Матеріали ----------------------------------------------------------- */
-
-.group {
-    min-width: 0;
-    margin: 0 0 28px;
-    padding: 0;
-    border: 0;
-}
-
-.group:last-child {
-    margin-bottom: 0;
-}
-
-.group legend {
-    margin-bottom: 10px;
-    padding: 0;
-    font-weight: 700;
-    font-size: 0.95rem;
-}
-
-.chips {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 10px;
-}
-
-.chip-body {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 14px 44px 14px 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 12px;
-    background: #fff;
-    transition: background-color 0.15s, border-color 0.15s;
-}
-
-.chip-body::after {
-    content: "";
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    width: 18px;
-    height: 18px;
-    border: 1.5px solid #9fb0c1;
-    border-radius: 50%;
-    background: #fff;
-}
-
-.chip-name {
-    font-weight: 600;
-    line-height: 1.3;
-}
-
-.chip-note {
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.85rem;
-    line-height: 1.35;
-}
-
-.chip-price {
-    margin-top: auto;
-    padding-top: 10px;
-    color: var(--blue);
-    font-size: 0.9rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
-}
-
-.chip:hover input:not(:checked) + .chip-body {
-    border-color: var(--blue);
-}
-
-.chip input:checked + .chip-body {
-    border-color: var(--blue);
-    background: var(--blue-soft);
-}
-
-.chip input:checked + .chip-body::after {
-    border-color: var(--blue);
-    background: radial-gradient(circle, var(--blue) 0 4.5px, #fff 5px);
-}
-
-/* --- Синя панель з підсумком (креслярська сітка) ------------------------- */
-
-.summary,
-.hero {
-    background-color: var(--ink);
-    background-image:
-        linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
-    background-size: 24px 24px;
-    background-position: -1px -1px;
-    color: #fff;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-}
-
-.summary {
-    position: sticky;
-    top: 24px;
-    padding: 28px;
-    border-radius: 20px;
-}
-
-.summary-label {
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 0.95rem;
-}
-
-.summary-total {
-    margin-top: 8px;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(1.7rem, 2.6vw, 2.15rem);
-    line-height: 1.15;
-    letter-spacing: -0.02em;
-    font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
-}
-
-.cur {
-    margin-left: 6px;
-    color: var(--amber);
-    font-size: 0.55em;
-    letter-spacing: 0;
-}
-
-.summary-per {
-    min-height: 3em;
-    margin-top: 8px;
-    color: rgba(255, 255, 255, 0.78);
-    font-size: 0.95rem;
-}
-
-.bar {
-    display: flex;
-    gap: 2px;
-    height: 12px;
-    margin: 20px 0 14px;
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.seg {
-    flex: 1 1 0;
-    min-width: 3px;
-    transition: flex-grow 0.35s ease;
-}
-
-.seg-0 { background: #4c8fe0; }
-.seg-1 { background: #2fb5a0; }
-.seg-2 { background: #9a8af0; }
-.seg-3 { background: #ee7b6a; }
-.seg-work { background: var(--amber); }
-
-.legend {
-    padding: 0;
-    list-style: none;
-}
-
-.legend li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    font-size: 0.92rem;
-}
-
-.legend-name {
-    flex: 1;
-}
-
-.legend-sum {
-    font-variant-numeric: tabular-nums;
-}
-
-.swatch {
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 4px;
-}
-
-.summary .btn {
-    margin-top: 22px;
-}
-
-.fine {
-    margin-top: 14px;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 0.8rem;
-    line-height: 1.4;
-}
-
-/* --- Кнопки -------------------------------------------------------------- */
-
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px 24px;
-    border: 1.5px solid transparent;
-    border-radius: 12px;
-    font-weight: 700;
-    text-decoration: none;
-    cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
-}
-
-.btn-block {
-    width: 100%;
-}
-
-.btn-amber {
-    background: var(--amber);
-    color: var(--ink);
-}
-
-.btn-amber:hover {
-    background: #f7bb46;
-}
-
-.btn-solid {
-    background: var(--ink);
-    color: #fff;
-}
-
-.btn-solid:hover {
-    background: #1d3c58;
-}
-
-.btn-ghost {
-    border-color: var(--line);
-    background: #fff;
-    color: var(--ink);
-}
-
-.btn-ghost:hover {
-    border-color: var(--ink);
-}
-
-/* --- Сторінка результату ------------------------------------------------- */
-
-.result {
-    display: grid;
-    gap: 24px;
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 28px 24px 80px;
-}
-
-.hero {
-    padding: 40px;
-    border-radius: 24px;
-}
-
-.hero-total {
-    margin-top: 8px;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(2rem, 7vw, 3.5rem);
-    line-height: 1.1;
-    letter-spacing: -0.02em;
-    font-variant-numeric: tabular-nums;
-}
-
-.hero .summary-per {
-    min-height: 0;
-    font-size: 1.05rem;
-}
-
-.meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 22px;
-    padding: 0;
-    list-style: none;
-}
-
-.meta li {
-    padding: 6px 14px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
-    font-size: 0.9rem;
-}
-
-.hero .bar {
-    height: 16px;
-    margin-top: 32px;
-    border-radius: 8px;
-}
-
-.hero .legend {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    column-gap: 32px;
-}
-
-.block {
-    padding: 32px;
-}
-
-.block h2 {
-    font-size: 1.25rem;
-    margin-bottom: 18px;
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.table th {
-    padding: 0 12px 12px;
-    border-bottom: 1.5px solid var(--ink);
-    color: var(--muted);
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-align: left;
-}
-
-.table td {
-    padding: 16px 12px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: top;
-}
-
-.table .num {
-    text-align: right;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-}
-
-.table th:first-child,
-.table td:first-child {
-    padding-left: 0;
-}
-
-.table th:last-child,
-.table td:last-child {
-    padding-right: 0;
-}
-
-.cell-flex {
-    display: flex;
-    gap: 12px;
-}
-
-.cell-flex .swatch {
-    margin-top: 6px;
-}
-
-.sub {
-    display: block;
-    color: var(--muted);
-    font-size: 0.9rem;
-    line-height: 1.35;
-}
-
-.sub-mobile {
-    display: none;
-}
-
-.table tfoot td {
-    border-bottom: 0;
-    padding-top: 20px;
-    font-size: 1.15rem;
-    font-weight: 700;
-}
-
-.notes {
-    display: grid;
-    gap: 10px;
-    padding: 0;
-    list-style: none;
-    color: #2b4157;
-}
-
-.notes li {
-    position: relative;
-    padding-left: 22px;
-    max-width: 78ch;
-}
-
-.notes li::before {
-    content: "";
-    position: absolute;
-    top: 0.6em;
-    left: 2px;
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-    background: var(--blue);
-}
-
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.actions form {
-    margin: 0;
-}
-
-/* --- Планшети та телефони ------------------------------------------------ */
-
-@media (max-width: 1100px) {
-    .layout {
-        grid-template-columns: minmax(0, 1fr);
-    }
-
-    .summary {
-        position: static;
-    }
-}
-
+    --paper: #f1f5f9; --panel: #ffffff; --ink: #0f172a; --navy: #0f172a; --navy-2: #1e293b;
+    --amber: #f59e0b; --amber-strong: #d97706; --steel: #0284c7; --line: #e2e8f0;
+    --line-navy: rgba(255, 255, 255, 0.16); --muted: #64748b; --muted-navy: rgba(255, 255, 255, 0.68);
+    --focus: #0284c7; --danger: #ef4444;
+    --font-body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+    --font-display: "IBM Plex Sans Condensed", var(--font-body);
+    --font-mono: "IBM Plex Mono", monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
+h1, h2, h3, p, ul { margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+
+.top { max-width: 1240px; margin: 0 auto; padding: 24px 24px 0; }
+.brand { display: inline-flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; }
+.brand-mark { display: grid; place-items: center; width: 40px; height: 40px; border-radius: 10px; background: var(--navy); color: var(--amber); font-size: 1.2rem; }
+.brand-name { font-family: var(--font-display); font-weight: 700; font-size: 1.2rem; letter-spacing: -0.01em; }
+
+.intro { max-width: 1240px; margin: 0 auto; padding: 28px 24px 0; border-bottom: 1px solid var(--line); }
+.intro-inner { padding-bottom: 24px; }
+.intro h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(1.8rem, 3.5vw, 2.6rem); color: var(--navy); }
+.intro p { margin-top: 8px; color: var(--muted); font-size: 1.05rem; }
+
+.layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 24px; align-items: start; max-width: 1240px; margin: 0 auto; padding: 28px 24px 80px; }
+.sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); overflow: hidden; }
+.alert { margin: 24px 32px 0; padding: 14px 18px; border: 1.5px solid var(--danger); border-radius: 8px; background: #fef2f2; color: #991b1b; }
+
+.row { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 28px; padding: 28px 32px; }
+.row + .row { border-top: 1px solid var(--line); }
+.row-head h2 { position: relative; padding-left: 14px; font-size: 1.1rem; font-weight: 700; color: var(--navy); }
+.row-head h2::before { content: ""; position: absolute; top: 0.15em; left: 0; width: 4px; height: 1.1em; background: var(--amber); border-radius: 2px; }
+.row-head p { margin-top: 6px; padding-left: 14px; color: var(--muted); font-size: 0.88rem; }
+
+.fields { display: grid; gap: 20px; }
+.field-label { display: block; margin-bottom: 8px; font-weight: 600; font-size: 0.95rem; }
+.hint { margin-top: 6px; color: var(--muted); font-size: 0.85rem; }
+
+select, input[type="number"] { width: 100%; height: 48px; padding: 0 14px; border: 1.5px solid var(--line); border-radius: 8px; background: #fff; font-size: 1rem; transition: border-color 0.15s; }
+select:focus, input[type="number"]:focus { outline: none; border-color: var(--focus); }
+.input-suffix { position: relative; max-width: 260px; }
+.input-suffix input { padding-right: 48px; font-family: var(--font-mono); font-weight: 500; }
+.suffix { position: absolute; top: 50%; right: 16px; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+
+.tile input, .pill input, .chip input { position: absolute; opacity: 0; pointer-events: none; }
+.tile, .pill, .chip { position: relative; display: block; cursor: pointer; }
+
+.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.tile-body { display: flex; flex-direction: column; gap: 8px; padding: 18px; border: 1.5px solid var(--line); border-radius: 10px; background: #fff; transition: all 0.15s; }
+.tile input:checked + .tile-body { border-color: var(--navy); background: var(--navy); color: #fff; }
+
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill span { display: grid; place-items: center; min-width: 50px; height: 44px; padding: 0 14px; border: 1.5px solid var(--line); border-radius: 8px; background: #fff; font-family: var(--font-mono); font-weight: 600; transition: all 0.15s; }
+.pill input:checked + span { border-color: var(--navy); background: var(--navy); color: #fff; }
+
+.group { margin: 0 0 24px; padding: 0; border: 0; }
+.group legend { margin-bottom: 12px; font-weight: 700; font-size: 0.95rem; color: var(--navy); }
+.chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+.chip-body { display: flex; flex-direction: column; height: 100%; padding: 14px; border: 1.5px solid var(--line); border-radius: 8px; background: #fff; transition: all 0.15s; }
+.chip-name { font-weight: 600; font-size: 0.95rem; }
+.chip-note { margin-top: 4px; color: var(--muted); font-size: 0.83rem; }
+.chip-price { margin-top: auto; padding-top: 10px; color: var(--steel); font-family: var(--font-mono); font-size: 0.87rem; font-weight: 600; }
+.chip input:checked + .chip-body { border-color: var(--steel); background: #f0f9ff; }
+
+.summary { position: sticky; top: 24px; padding: 28px; border-radius: 14px; background: var(--navy); color: #fff; box-shadow: 0 10px 25px rgba(15, 23, 42, 0.15); }
+.summary-label { color: var(--muted-navy); font-size: 0.92rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; }
+.summary-total { margin-top: 10px; font-family: var(--font-mono); font-weight: 700; font-size: clamp(1.8rem, 2.5vw, 2.2rem); }
+.cur { margin-left: 6px; color: var(--amber); }
+.summary-per { margin-top: 8px; color: var(--muted-navy); font-size: 0.92rem; }
+
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 14px 22px; border-radius: 8px; font-weight: 600; text-decoration: none; cursor: pointer; border: none; transition: all 0.15s; }
+.btn-block { width: 100%; }
+.btn-amber { background: var(--amber); color: #0f172a; }
+.btn-amber:hover { background: var(--amber-strong); }
+
+@media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 700px) {
-    .top { padding: 20px 16px 0; }
-    .intro { padding: 24px 16px 0; }
-
-    .layout {
-        gap: 20px;
-        padding: 20px 16px 0;
-    }
-
-    .row {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 16px;
-        padding: 24px 20px;
-    }
-
-    .alert {
-        margin: 20px 20px 0;
-    }
-
-    /* Компактна панель з підсумком, що завжди видна внизу екрана */
-    .summary {
-        position: sticky;
-        bottom: 0;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: center;
-        gap: 2px 16px;
-        margin: 0 -16px;
-        padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
-        border-radius: 20px 20px 0 0;
-    }
-
-    .summary-label,
-    .bar,
-    .legend,
-    .fine {
-        display: none;
-    }
-
-    .summary-total {
-        margin-top: 0;
-        font-size: 1.25rem;
-        white-space: nowrap;
-        overflow-wrap: normal;
-    }
-
-    .summary-per {
-        min-height: 0;
-        margin-top: 0;
-        font-size: 0.85rem;
-    }
-
-    .summary .btn {
-        grid-column: 2;
-        grid-row: 1 / span 2;
-        width: auto;
-        max-width: 138px;
-        margin-top: 0;
-        padding: 10px 12px;
-        font-size: 0.9rem;
-        line-height: 1.25;
-        text-align: center;
-    }
-
-    .result { padding: 20px 16px 60px; }
-    .hero { padding: 28px 22px; }
-    .block { padding: 24px 20px; }
-
-    .table thead,
-    .col-detail,
-    .col-share {
-        display: none;
-    }
-
-    .sub-mobile {
-        display: block;
-    }
-
-    .actions .btn {
-        flex: 1 1 100%;
-    }
+    .row { grid-template-columns: minmax(0, 1fr); padding: 20px; }
+    .summary { position: sticky; bottom: 0; border-radius: 14px 14px 0 0; padding: 20px; z-index: 10; }
 }
-
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        transition: none !important;
-    }
-}
-
-@media print {
-    body { background: #fff; }
-    .top, .actions { display: none; }
-    .result { padding: 0; }
-    .block { border: 0; padding: 16px 0; }
-}
-
-.set-note {
-    margin: 0 0 18px;
-}
-
 {% endraw %}
     </style>
 </head>
@@ -1293,88 +618,57 @@ input[type="number"]:focus {
 
 <header class="top">
     <a class="brand" href="{{ url_for('index') }}">
-        <span class="brand-mark">
-            <svg width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M6 17 16 8l10 9M9 15v10h14V15"/>
-            </svg>
-        </span>
+        <span class="brand-mark">🏠</span>
         <span class="brand-name">Конструктор житла</span>
     </a>
 </header>
 
 <div class="intro">
-    <h1>Порахуйте вартість житла за матеріалами</h1>
-    <p>Оберіть місто, тип житла та матеріали — підсумок праворуч оновлюється одразу.</p>
+    <div class="intro-inner">
+        <h1>Порахуйте вартість житла за матеріалами</h1>
+        <p>Оберіть місто, тип житла та матеріали — підсумок праворуч оновлюється одразу.</p>
+    </div>
 </div>
 
-<form class="layout" id="calc" action="{{ url_for('calculate_view') }}" method="post"
-      data-estimate-url="{{ url_for('estimate_view') }}">
-
+<form class="layout" id="calc" action="{{ url_for('calculate_view') }}" method="post" data-estimate-url="{{ url_for('estimate_view') }}">
     <div class="sheet">
-
         {% if errors %}
         <div class="alert" role="alert">
-            <strong>Перевірте, будь ласка, форму</strong>
-            <ul>
-                {% for error in errors %}
-                <li>{{ error }}</li>
-                {% endfor %}
-            </ul>
+            <strong>Перевірте форму:</strong>
+            <ul>{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
         </div>
         {% endif %}
 
-        <!-- Місто -->
         <section class="row">
             <div class="row-head">
                 <h2>Місто</h2>
-                <p>Ціни на матеріали й роботи залежать від регіону.</p>
+                <p>Ціни на матеріали залежать від регіону.</p>
             </div>
             <div class="fields">
-                <div>
-                    <label class="field-label" for="city">Виберіть місто</label>
-                    <select name="city" id="city" required>
-                        <option value="">Виберіть місто</option>
-                        {% for key, city in cities.items() %}
-                        <option value="{{ key }}" {% if initial.city == key %}selected{% endif %}>{{ city.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
+                <select name="city" id="city" required>
+                    <option value="">Виберіть місто</option>
+                    {% for key, city in cities.items() %}
+                    <option value="{{ key }}" {% if initial.city == key %}selected{% endif %}>{{ city.name }}</option>
+                    {% endfor %}
+                </select>
             </div>
         </section>
 
-        <!-- Тип житла -->
         <section class="row">
             <div class="row-head">
-                <h2>Що ви хочете створити?</h2>
-                <p>Від типу залежить набір матеріалів.</p>
+                <h2>Тип житла</h2>
             </div>
             <div class="fields">
                 <div class="tiles">
                     {% for btype, spec in catalog.items() %}
                     <label class="tile">
                         <input type="radio" name="building_type" value="{{ btype }}"
-                               data-min="{{ spec['area_limits'][0] }}"
-                               data-max="{{ spec['area_limits'][1] }}"
+                               data-min="{{ spec['area_limits'][0] }}" data-max="{{ spec['area_limits'][1] }}"
                                data-example="{{ spec['area_example'] }}"
                                {% if cur_type == btype %}checked{% endif %} required>
                         <span class="tile-body">
-                            {% if btype == 'apartment' %}
-                            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <rect x="10" y="6" width="28" height="36" rx="2"/>
-                                <path d="M17 14h4M27 14h4M17 22h4M27 22h4M17 30h4M27 30h4"/>
-                                <path d="M21 42v-6h6v6"/>
-                            </svg>
-                            {% else %}
-                            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M6 22 24 7l18 15"/>
-                                <path d="M10 19v23h28V19"/>
-                                <path d="M20 42V30h8v12"/>
-                            </svg>
-                            {% endif %}
-                            <span>
-                                <span class="tile-name">{{ spec['title'] }}</span>
-                                <span class="tile-desc">{{ spec['summary'] }}</span>
-                            </span>
+                            <span class="tile-name" style="font-weight: 700;">{{ spec['title'] }}</span>
+                            <span class="tile-desc" style="font-size: 0.88rem;">{{ spec['summary'] }}</span>
                         </span>
                     </label>
                     {% endfor %}
@@ -1382,17 +676,14 @@ input[type="number"]:focus {
             </div>
         </section>
 
-        <!-- Параметри -->
         <section class="row">
             <div class="row-head">
                 <h2>Параметри</h2>
-                <p>Кількість кімнат і площа впливають на обсяг матеріалів.</p>
             </div>
             <div class="fields">
-
                 <div>
-                    <span class="field-label" id="rooms-label">Кількість кімнат</span>
-                    <div class="pills" role="group" aria-labelledby="rooms-label">
+                    <span class="field-label">Кількість кімнат</span>
+                    <div class="pills">
                         {% for r in range(1, 6) %}
                         <label class="pill">
                             <input type="radio" name="rooms" value="{{ r }}" {% if cur_rooms == r|string %}checked{% endif %}>
@@ -1403,57 +694,45 @@ input[type="number"]:focus {
                 </div>
 
                 <div>
-                    <label class="field-label" for="area">Загальна площа</label>
+                    <label class="field-label" for="area">Загальна площа (м²)</label>
                     <div class="input-suffix">
-                        <input type="number" name="area" id="area"
-                               min="{{ catalog[cur_type]['area_limits'][0] }}"
-                               max="{{ catalog[cur_type]['area_limits'][1] }}"
-                               step="0.1" inputmode="decimal"
-                               placeholder="Наприклад: {{ catalog[cur_type]['area_example'] }}"
+                        <input type="number" name="area" id="area" step="0.1"
                                value="{{ initial.area or '' }}" required>
                         <span class="suffix">м²</span>
                     </div>
-                    <p class="hint" id="areaHint">Від {{ catalog[cur_type]['area_limits'][0] }} до {{ catalog[cur_type]['area_limits'][1] }} м²</p>
+                    <p class="hint" id="areaHint"></p>
                 </div>
 
                 <div id="floorsRow" {% if cur_type != 'house' %}hidden{% endif %}>
-                    <span class="field-label" id="floors-label">Кількість поверхів</span>
-                    <div class="pills" role="group" aria-labelledby="floors-label">
+                    <span class="field-label">Кількість поверхів</span>
+                    <div class="pills">
                         {% for f in range(1, 4) %}
                         <label class="pill">
-                            <input type="radio" name="floors" value="{{ f }}"
-                                   {% if cur_floors == f|string %}checked{% endif %}
-                                   {% if cur_type != 'house' %}disabled{% endif %}>
+                            <input type="radio" name="floors" value="{{ f }}" {% if cur_floors == f|string %}checked{% endif %}>
                             <span>{{ f }}</span>
                         </label>
                         {% endfor %}
                     </div>
                 </div>
-
             </div>
         </section>
 
-        <!-- Матеріали: окремий набір для квартири й для будинку -->
         <section class="row">
             <div class="row-head">
                 <h2>Матеріали</h2>
-                <p>Набір залежить від типу житла.</p>
             </div>
             <div>
                 {% for btype, spec in catalog.items() %}
                 <div class="mat-set" data-type="{{ btype }}" {% if cur_type != btype %}hidden{% endif %}>
-                    <p class="hint set-note">{{ spec['materials_hint'] }}</p>
-
                     {% for gkey, group in spec['groups'].items() %}
-                    {% set saved = initial.get(btype ~ '_' ~ gkey) %}
                     <fieldset class="group">
                         <legend>{{ group['title'] }}</legend>
                         <div class="chips">
                             {% for okey, opt in group['options'].items() %}
                             <label class="chip">
-                                <input type="radio" name="{{ btype }}_{{ gkey }}" value="{{ okey }}" required
+                                <input type="radio" name="{{ btype }}_{{ gkey }}" value="{{ okey }}"
                                        {% if cur_type != btype %}disabled{% endif %}
-                                       {% if saved == okey or (saved not in group['options'] and loop.first) %}checked{% endif %}>
+                                       {% if loop.first %}checked{% endif %}>
                                 <span class="chip-body">
                                     <span class="chip-name">{{ opt['name'] }}</span>
                                     <span class="chip-note">{{ opt['note'] }}</span>
@@ -1468,75 +747,32 @@ input[type="number"]:focus {
                 {% endfor %}
             </div>
         </section>
-
     </div>
 
-    <!-- Живий підсумок -->
     <aside class="summary">
         <p class="summary-label">Орієнтовна вартість</p>
-        <p class="summary-total">
-            <span id="total">—</span><span class="cur" id="totalCur" hidden>грн</span>
-        </p>
-        <p class="summary-per" id="perM2" aria-live="polite">Виберіть місто та вкажіть площу.</p>
-
-        <div class="bar" id="bar" aria-hidden="true" hidden></div>
-        <ul class="legend" id="legend"></ul>
-
-        <button type="submit" class="btn btn-amber btn-block">Детальний розрахунок</button>
-        <p class="fine">Сума орієнтовна: остаточна ціна залежить від підрядника, сезону та стану приміщення.</p>
+        <p class="summary-total"><span id="total">—</span><span class="cur" id="totalCur" hidden>грн</span></p>
+        <p class="summary-per" id="perM2">Заповніть форму для розрахунку.</p>
+        <button type="submit" class="btn btn-amber btn-block" style="margin-top: 20px;">Детальний розрахунок</button>
     </aside>
-
 </form>
 
 <script>
 {% raw %}
 (function () {
     "use strict";
-
     var form = document.getElementById("calc");
-    var areaInput = document.getElementById("area");
-    var areaHint = document.getElementById("areaHint");
     var floorsRow = document.getElementById("floorsRow");
-
     var totalEl = document.getElementById("total");
     var curEl = document.getElementById("totalCur");
     var perEl = document.getElementById("perM2");
-    var barEl = document.getElementById("bar");
-    var legendEl = document.getElementById("legend");
-
     var estimateUrl = form.getAttribute("data-estimate-url");
-    var reduceMotion = window.matchMedia &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    var numberFormat = new Intl.NumberFormat("uk-UA");
-
-    function fmt(n) {
-        return numberFormat.format(Math.round(n));
-    }
-
-    function escapeHtml(text) {
-        var map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-        return String(text).replace(/[&<>"']/g, function (c) { return map[c]; });
-    }
-
-    /* ---------- Тип житла: показуємо потрібний набір матеріалів ---------- */
 
     function applyType() {
         var radio = form.querySelector('input[name="building_type"]:checked');
         if (!radio) return;
         var type = radio.value;
-
-        areaInput.min = radio.getAttribute("data-min");
-        areaInput.max = radio.getAttribute("data-max");
-        areaInput.placeholder = "Наприклад: " + radio.getAttribute("data-example");
-        areaHint.textContent = "Від " + radio.getAttribute("data-min") +
-            " до " + radio.getAttribute("data-max") + " м²";
-
         floorsRow.hidden = type !== "house";
-        Array.prototype.forEach.call(floorsRow.querySelectorAll("input"), function (input) {
-            input.disabled = type !== "house";
-        });
-
-        // Вимкнені поля не потрапляють ні у форму, ні у перевірку required
         Array.prototype.forEach.call(document.querySelectorAll(".mat-set"), function (set) {
             var active = set.getAttribute("data-type") === type;
             set.hidden = !active;
@@ -1546,129 +782,34 @@ input[type="number"]:focus {
         });
     }
 
-    /* ---------- Живий підсумок ---------- */
-
-    var shownTotal = 0;
-    var rafId = 0;
-
-    function animateTotal(target) {
-        cancelAnimationFrame(rafId);
-
-        if (reduceMotion) {
-            shownTotal = target;
-            totalEl.textContent = fmt(target);
-            return;
-        }
-
-        var from = shownTotal;
-        var start = performance.now();
-        var duration = 350;
-
-        function step(now) {
-            var t = Math.min(1, (now - start) / duration);
-            var eased = 1 - Math.pow(1 - t, 3);
-            shownTotal = Math.round(from + (target - from) * eased);
-            totalEl.textContent = fmt(shownTotal);
-            if (t < 1) rafId = requestAnimationFrame(step);
-        }
-        rafId = requestAnimationFrame(step);
-    }
-
-    function syncBar(rows) {
-        var existing = {};
-        Array.prototype.forEach.call(barEl.children, function (el) {
-            existing[el.getAttribute("data-key")] = el;
-        });
-
-        rows.forEach(function (row) {
-            var el = existing[row.key];
-            if (!el) {
-                el = document.createElement("span");
-                el.setAttribute("data-key", row.key);
-            }
-            el.className = "seg " + row.cls;
-            el.style.flexGrow = row.cost;
-            barEl.appendChild(el); // переставляє елемент у правильний порядок
-            delete existing[row.key];
-        });
-
-        Object.keys(existing).forEach(function (key) {
-            barEl.removeChild(existing[key]);
-        });
-    }
-
-    function showEmpty(messages) {
-        cancelAnimationFrame(rafId);
-        shownTotal = 0;
-        totalEl.textContent = "—";
-        curEl.hidden = true;
-        perEl.textContent = messages.join(". ") + ".";
-        barEl.hidden = true;
-        legendEl.innerHTML = "";
-    }
-
-    function showEstimate(data) {
-        var rows = data.rows.map(function (row, i) {
-            return { key: row.key, label: row.label, cost: row.cost, cls: "seg-" + i };
-        });
-        rows.push({ key: "work", label: "Роботи", cost: data.work_cost, cls: "seg-work" });
-
-        curEl.hidden = false;
-        barEl.hidden = false;
-        perEl.textContent = "Близько " + fmt(data.per_m2) + " грн за м²";
-
-        syncBar(rows);
-        legendEl.innerHTML = rows.map(function (row) {
-            return '<li><span class="swatch ' + row.cls + '"></span>' +
-                '<span class="legend-name">' + escapeHtml(row.label) + "</span>" +
-                '<span class="legend-sum">' + fmt(row.cost) + " грн</span></li>";
-        }).join("");
-
-        animateTotal(data.total);
-    }
-
-    var requestId = 0;
-    var timer = 0;
-
     function runEstimate() {
-        var mine = ++requestId;
-        fetch(estimateUrl, {
-            method: "POST",
-            body: new URLSearchParams(new FormData(form))
-        })
-            .then(function (response) { return response.json(); })
+        fetch(estimateUrl, { method: "POST", body: new URLSearchParams(new FormData(form)) })
+            .then(function (r) { return r.json(); })
             .then(function (data) {
-                if (mine !== requestId) return; // прийшла застаріла відповідь
-                if (data.ok) showEstimate(data);
-                else showEmpty(data.errors);
-            })
-            .catch(function () {
-                if (mine === requestId) showEmpty(["Не вдалося оновити розрахунок"]);
+                if (data.ok) {
+                    totalEl.textContent = new Intl.NumberFormat("uk-UA").format(data.total);
+                    curEl.hidden = false;
+                    perEl.textContent = "Близько " + new Intl.NumberFormat("uk-UA").format(data.per_m2) + " грн/м² (термін: ~" + data.timeline.days + " днів)";
+                } else {
+                    totalEl.textContent = "—";
+                    curEl.hidden = true;
+                    perEl.textContent = data.errors.join(". ");
+                }
             });
     }
 
-    function scheduleEstimate() {
-        clearTimeout(timer);
-        timer = setTimeout(runEstimate, 180);
-    }
-
-    /* ---------- Події ---------- */
-
-    form.addEventListener("input", scheduleEstimate);
-    form.addEventListener("change", function (event) {
-        if (event.target.name === "building_type") applyType();
-        scheduleEstimate();
+    form.addEventListener("input", runEstimate);
+    form.addEventListener("change", function (e) {
+        if (e.target.name === "building_type") applyType();
+        runEstimate();
     });
-
     applyType();
     runEstimate();
 })();
-
 {% endraw %}
 </script>
 
 </body>
-
 </html>
 """
 
@@ -1678,7 +819,7 @@ RESULT_HTML = r"""<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#10263b">
+    <meta name="theme-color" content="#0f172a">
 
     <title>Розрахунок вартості — Конструктор житла</title>
 
@@ -1686,891 +827,59 @@ RESULT_HTML = r"""<!DOCTYPE html>
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Onest:wght@400;500;600;700&family=Unbounded:wght@500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
 
     <style>
 {% raw %}
-/* ==========================================================================
-   Конструктор житла
-   ========================================================================== */
-
 :root {
-    --paper: #edf1f4;
-    --sheet: #ffffff;
-    --ink: #10263b;
-    --blue: #1b4f8a;
-    --blue-soft: #e4eef8;
-    --amber: #f0a81e;
-    --line: #d3dce5;
-    --muted: #5a6d80;
-    --focus: #2f7fe0;
-    --danger: #b3261e;
-
-    --font-body: "Onest", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
-    --font-display: "Unbounded", "Onest", system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
-}
-
-*,
-*::before,
-*::after {
-    box-sizing: border-box;
-}
-
-[hidden] {
-    display: none !important;
-}
-
-html {
-    -webkit-text-size-adjust: 100%;
-}
-
-body {
-    margin: 0;
-    background: var(--paper);
-    color: var(--ink);
-    font-family: var(--font-body);
-    font-size: 16px;
-    line-height: 1.5;
-    -webkit-font-smoothing: antialiased;
-}
-
-h1, h2, h3, p, ul {
-    margin: 0;
-}
-
-button, input, select {
-    font: inherit;
-    color: inherit;
-}
-
-:focus-visible {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-}
-
-/* --- Шапка ---------------------------------------------------------------- */
-
-.top {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 28px 24px 0;
-}
-
-.brand {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-    color: inherit;
-    text-decoration: none;
-}
-
-.brand-mark {
-    display: grid;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    background: var(--ink);
-    color: var(--amber);
-}
-
-.brand-name {
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: 1.05rem;
-    letter-spacing: -0.01em;
-}
-
-.intro {
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 36px 24px 0;
-}
-
-.intro h1 {
-    max-width: 22ch;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(1.6rem, 3.4vw, 2.5rem);
-    line-height: 1.15;
-    letter-spacing: -0.02em;
-}
-
-.intro p {
-    max-width: 52ch;
-    margin-top: 14px;
-    color: var(--muted);
-    font-size: 1.05rem;
-}
-
-/* --- Основна сітка ------------------------------------------------------- */
-
-.layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 360px;
-    gap: 28px;
-    align-items: start;
-    max-width: 1240px;
-    margin: 0 auto;
-    padding: 28px 24px 80px;
-}
-
-.sheet {
-    background: var(--sheet);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-}
-
-.alert {
-    margin: 24px 32px 0;
-    padding: 14px 18px;
-    border: 1.5px solid var(--danger);
-    border-radius: 12px;
-    background: #fdecea;
-    color: #5f1410;
-}
-
-.alert ul {
-    margin-top: 6px;
-    padding-left: 20px;
-}
-
-/* --- Рядки форми: назва зліва, поля справа ------------------------------- */
-
-.row {
-    display: grid;
-    grid-template-columns: 170px minmax(0, 1fr);
-    gap: 28px;
-    padding: 32px;
-}
-
-.row + .row {
-    border-top: 1px solid var(--line);
-}
-
-.row-head h2 {
-    font-size: 1.1rem;
-    font-weight: 700;
-    line-height: 1.3;
-}
-
-.row-head p {
-    margin-top: 6px;
-    color: var(--muted);
-    font-size: 0.9rem;
-}
-
-.fields {
-    display: grid;
-    gap: 24px;
-}
-
-.field-label {
-    display: block;
-    margin-bottom: 10px;
-    font-weight: 600;
-    font-size: 0.95rem;
-}
-
-.hint {
-    margin-top: 8px;
-    color: var(--muted);
-    font-size: 0.85rem;
-}
-
-/* --- Поля вводу ---------------------------------------------------------- */
-
-select,
-input[type="number"] {
-    width: 100%;
-    height: 50px;
-    padding: 0 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    font-size: 1rem;
-}
-
-select {
-    appearance: none;
-    padding-right: 42px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9' fill='none'%3E%3Cpath d='M1 1.5 7 7.5l6-6' stroke='%2310263b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 16px center;
-    cursor: pointer;
-}
-
-select:hover,
-input[type="number"]:hover {
-    border-color: #9fb0c1;
-}
-
-select:focus,
-input[type="number"]:focus {
-    outline: none;
-    border-color: var(--blue);
-    box-shadow: 0 0 0 3px rgba(47, 127, 224, 0.25);
-}
-
-.input-suffix {
-    position: relative;
-    max-width: 260px;
-}
-
-.input-suffix input {
-    padding-right: 48px;
-}
-
-.suffix {
-    position: absolute;
-    top: 50%;
-    right: 16px;
-    transform: translateY(-50%);
-    color: var(--muted);
-    pointer-events: none;
-}
-
-/* Приховуємо нативні радіокнопки, лишаючи їх доступними з клавіатури */
-.tile input,
-.pill input,
-.chip input {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 1px;
-    height: 1px;
-    opacity: 0;
-    pointer-events: none;
-}
-
-.tile,
-.pill,
-.chip {
-    position: relative;
-    display: block;
-    cursor: pointer;
-}
-
-/* --- Тип житла ----------------------------------------------------------- */
-
-.tiles {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-.tile-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    height: 100%;
-    padding: 18px;
-    border: 1.5px solid var(--line);
-    border-radius: 16px;
-    background: #fff;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.tile-body svg {
-    width: 44px;
-    height: 44px;
-    color: var(--blue);
-}
-
-.tile-name {
-    display: block;
-    font-size: 1.15rem;
-    font-weight: 700;
-}
-
-.tile-desc {
-    display: block;
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.88rem;
-    line-height: 1.35;
-}
-
-.tile:hover input:not(:checked) + .tile-body {
-    border-color: var(--blue);
-}
-
-.tile input:checked + .tile-body {
-    border-color: var(--ink);
-    background: var(--ink);
-    color: #fff;
-}
-
-.tile input:checked + .tile-body svg {
-    color: var(--amber);
-}
-
-.tile input:checked + .tile-body .tile-desc {
-    color: rgba(255, 255, 255, 0.78);
-}
-
-.tile input:focus-visible + .tile-body,
-.pill input:focus-visible + span,
-.chip input:focus-visible + .chip-body {
-    outline: 3px solid var(--focus);
-    outline-offset: 2px;
-}
-
-/* --- Кімнати та поверхи -------------------------------------------------- */
-
-.pills {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-}
-
-.pill span {
-    display: grid;
-    place-items: center;
-    min-width: 52px;
-    height: 46px;
-    padding: 0 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 10px;
-    background: #fff;
-    font-weight: 600;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-}
-
-.pill:hover input:not(:checked) + span {
-    border-color: var(--blue);
-}
-
-.pill input:checked + span {
-    border-color: var(--blue);
-    background: var(--blue);
-    color: #fff;
-}
-
-/* --- Матеріали ----------------------------------------------------------- */
-
-.group {
-    min-width: 0;
-    margin: 0 0 28px;
-    padding: 0;
-    border: 0;
-}
-
-.group:last-child {
-    margin-bottom: 0;
-}
-
-.group legend {
-    margin-bottom: 10px;
-    padding: 0;
-    font-weight: 700;
-    font-size: 0.95rem;
-}
-
-.chips {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-    gap: 10px;
-}
-
-.chip-body {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    padding: 14px 44px 14px 14px;
-    border: 1.5px solid var(--line);
-    border-radius: 12px;
-    background: #fff;
-    transition: background-color 0.15s, border-color 0.15s;
-}
-
-.chip-body::after {
-    content: "";
-    position: absolute;
-    top: 14px;
-    right: 14px;
-    width: 18px;
-    height: 18px;
-    border: 1.5px solid #9fb0c1;
-    border-radius: 50%;
-    background: #fff;
-}
-
-.chip-name {
-    font-weight: 600;
-    line-height: 1.3;
-}
-
-.chip-note {
-    margin-top: 2px;
-    color: var(--muted);
-    font-size: 0.85rem;
-    line-height: 1.35;
-}
-
-.chip-price {
-    margin-top: auto;
-    padding-top: 10px;
-    color: var(--blue);
-    font-size: 0.9rem;
-    font-weight: 600;
-    font-variant-numeric: tabular-nums;
+    --paper: #f1f5f9; --panel: #ffffff; --ink: #0f172a; --navy: #0f172a; --navy-2: #1e293b;
+    --amber: #f59e0b; --steel: #0284c7; --line: #cbd5e1; --muted: #64748b;
+    --font-body: "IBM Plex Sans", system-ui, sans-serif; --font-mono: "IBM Plex Mono", monospace;
 }
+*, *::before, *::after { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); font-size: 16px; line-height: 1.5; }
 
-.chip:hover input:not(:checked) + .chip-body {
-    border-color: var(--blue);
-}
-
-.chip input:checked + .chip-body {
-    border-color: var(--blue);
-    background: var(--blue-soft);
-}
-
-.chip input:checked + .chip-body::after {
-    border-color: var(--blue);
-    background: radial-gradient(circle, var(--blue) 0 4.5px, #fff 5px);
-}
-
-/* --- Синя панель з підсумком (креслярська сітка) ------------------------- */
-
-.summary,
-.hero {
-    background-color: var(--ink);
-    background-image:
-        linear-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.055) 1px, transparent 1px);
-    background-size: 24px 24px;
-    background-position: -1px -1px;
-    color: #fff;
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
-}
-
-.summary {
-    position: sticky;
-    top: 24px;
-    padding: 28px;
-    border-radius: 20px;
-}
-
-.summary-label {
-    color: rgba(255, 255, 255, 0.72);
-    font-size: 0.95rem;
-}
-
-.summary-total {
-    margin-top: 8px;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(1.7rem, 2.6vw, 2.15rem);
-    line-height: 1.15;
-    letter-spacing: -0.02em;
-    font-variant-numeric: tabular-nums;
-    overflow-wrap: anywhere;
-}
-
-.cur {
-    margin-left: 6px;
-    color: var(--amber);
-    font-size: 0.55em;
-    letter-spacing: 0;
-}
-
-.summary-per {
-    min-height: 3em;
-    margin-top: 8px;
-    color: rgba(255, 255, 255, 0.78);
-    font-size: 0.95rem;
-}
-
-.bar {
-    display: flex;
-    gap: 2px;
-    height: 12px;
-    margin: 20px 0 14px;
-    border-radius: 6px;
-    overflow: hidden;
-}
-
-.seg {
-    flex: 1 1 0;
-    min-width: 3px;
-    transition: flex-grow 0.35s ease;
-}
-
-.seg-0 { background: #4c8fe0; }
-.seg-1 { background: #2fb5a0; }
-.seg-2 { background: #9a8af0; }
-.seg-3 { background: #ee7b6a; }
-.seg-work { background: var(--amber); }
-
-.legend {
-    padding: 0;
-    list-style: none;
-}
-
-.legend li {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
-    font-size: 0.92rem;
-}
-
-.legend-name {
-    flex: 1;
-}
-
-.legend-sum {
-    font-variant-numeric: tabular-nums;
-}
-
-.swatch {
-    flex: none;
-    width: 12px;
-    height: 12px;
-    border-radius: 4px;
-}
-
-.summary .btn {
-    margin-top: 22px;
-}
-
-.fine {
-    margin-top: 14px;
-    color: rgba(255, 255, 255, 0.62);
-    font-size: 0.8rem;
-    line-height: 1.4;
-}
-
-/* --- Кнопки -------------------------------------------------------------- */
-
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 14px 24px;
-    border: 1.5px solid transparent;
-    border-radius: 12px;
-    font-weight: 700;
-    text-decoration: none;
-    cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
-}
-
-.btn-block {
-    width: 100%;
-}
-
-.btn-amber {
-    background: var(--amber);
-    color: var(--ink);
-}
-
-.btn-amber:hover {
-    background: #f7bb46;
-}
-
-.btn-solid {
-    background: var(--ink);
-    color: #fff;
-}
-
-.btn-solid:hover {
-    background: #1d3c58;
-}
-
-.btn-ghost {
-    border-color: var(--line);
-    background: #fff;
-    color: var(--ink);
-}
-
-.btn-ghost:hover {
-    border-color: var(--ink);
-}
-
-/* --- Сторінка результату ------------------------------------------------- */
-
-.result {
-    display: grid;
-    gap: 24px;
-    max-width: 1000px;
-    margin: 0 auto;
-    padding: 28px 24px 80px;
-}
-
-.hero {
-    padding: 40px;
-    border-radius: 24px;
-}
-
-.hero-total {
-    margin-top: 8px;
-    font-family: var(--font-display);
-    font-weight: 600;
-    font-size: clamp(2rem, 7vw, 3.5rem);
-    line-height: 1.1;
-    letter-spacing: -0.02em;
-    font-variant-numeric: tabular-nums;
-}
+.top { max-width: 1000px; margin: 0 auto; padding: 24px 24px 0; }
+.brand { display: inline-flex; align-items: center; gap: 12px; color: inherit; text-decoration: none; font-weight: 700; font-size: 1.1rem; }
 
-.hero .summary-per {
-    min-height: 0;
-    font-size: 1.05rem;
-}
-
-.meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 22px;
-    padding: 0;
-    list-style: none;
-}
-
-.meta li {
-    padding: 6px 14px;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.1);
-    font-size: 0.9rem;
-}
-
-.hero .bar {
-    height: 16px;
-    margin-top: 32px;
-    border-radius: 8px;
-}
-
-.hero .legend {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-    column-gap: 32px;
-}
-
-.block {
-    padding: 32px;
-}
-
-.block h2 {
-    font-size: 1.25rem;
-    margin-bottom: 18px;
-}
-
-.table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.table th {
-    padding: 0 12px 12px;
-    border-bottom: 1.5px solid var(--ink);
-    color: var(--muted);
-    font-size: 0.85rem;
-    font-weight: 600;
-    text-align: left;
-}
-
-.table td {
-    padding: 16px 12px;
-    border-bottom: 1px solid var(--line);
-    vertical-align: top;
-}
-
-.table .num {
-    text-align: right;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-}
-
-.table th:first-child,
-.table td:first-child {
-    padding-left: 0;
-}
-
-.table th:last-child,
-.table td:last-child {
-    padding-right: 0;
-}
-
-.cell-flex {
-    display: flex;
-    gap: 12px;
-}
-
-.cell-flex .swatch {
-    margin-top: 6px;
-}
-
-.sub {
-    display: block;
-    color: var(--muted);
-    font-size: 0.9rem;
-    line-height: 1.35;
-}
-
-.sub-mobile {
-    display: none;
-}
-
-.table tfoot td {
-    border-bottom: 0;
-    padding-top: 20px;
-    font-size: 1.15rem;
-    font-weight: 700;
-}
-
-.notes {
-    display: grid;
-    gap: 10px;
-    padding: 0;
-    list-style: none;
-    color: #2b4157;
-}
-
-.notes li {
-    position: relative;
-    padding-left: 22px;
-    max-width: 78ch;
-}
-
-.notes li::before {
-    content: "";
-    position: absolute;
-    top: 0.6em;
-    left: 2px;
-    width: 8px;
-    height: 8px;
-    border-radius: 2px;
-    background: var(--blue);
-}
-
-.actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.actions form {
-    margin: 0;
-}
+.result { display: grid; gap: 24px; max-width: 1000px; margin: 0 auto; padding: 28px 24px 80px; }
+.hero { padding: 36px 40px; border-radius: 16px; background: var(--navy); color: #fff; position: relative; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.15); }
+.hero-total { font-family: var(--font-mono); font-size: clamp(2.2rem, 5vw, 3.4rem); margin-top: 6px; font-weight: 700; }
 
-/* --- Планшети та телефони ------------------------------------------------ */
+.curr-picker { position: absolute; top: 28px; right: 28px; display: flex; gap: 6px; }
+.curr-btn { background: rgba(255,255,255,0.1); color: #fff; border: 1px solid rgba(255,255,255,0.2); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-family: var(--font-mono); font-weight: 600; font-size: 0.9rem; transition: all 0.15s; }
+.curr-btn:hover { background: rgba(255,255,255,0.2); }
+.curr-btn.active { background: var(--amber); color: #0f172a; border-color: var(--amber); }
 
-@media (max-width: 1100px) {
-    .layout {
-        grid-template-columns: minmax(0, 1fr);
-    }
+.sheet { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 32px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.03); }
+.sheet h2 { margin-bottom: 20px; font-size: 1.25rem; font-weight: 700; color: var(--navy); }
 
-    .summary {
-        position: static;
-    }
-}
-
-@media (max-width: 700px) {
-    .top { padding: 20px 16px 0; }
-    .intro { padding: 24px 16px 0; }
-
-    .layout {
-        gap: 20px;
-        padding: 20px 16px 0;
-    }
-
-    .row {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 16px;
-        padding: 24px 20px;
-    }
-
-    .alert {
-        margin: 20px 20px 0;
-    }
-
-    /* Компактна панель з підсумком, що завжди видна внизу екрана */
-    .summary {
-        position: sticky;
-        bottom: 0;
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) auto;
-        align-items: center;
-        gap: 2px 16px;
-        margin: 0 -16px;
-        padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
-        border-radius: 20px 20px 0 0;
-    }
-
-    .summary-label,
-    .bar,
-    .legend,
-    .fine {
-        display: none;
-    }
-
-    .summary-total {
-        margin-top: 0;
-        font-size: 1.25rem;
-        white-space: nowrap;
-        overflow-wrap: normal;
-    }
+.table { width: 100%; border-collapse: collapse; }
+.table th { padding: 0 12px 12px; border-bottom: 2px solid var(--ink); color: var(--muted); text-align: left; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.table td { padding: 16px 12px; border-bottom: 1px solid var(--line); }
+.num { text-align: right; font-family: var(--font-mono); }
 
-    .summary-per {
-        min-height: 0;
-        margin-top: 0;
-        font-size: 0.85rem;
-    }
+.sub { display: block; color: var(--muted); font-size: 0.88rem; }
+.range-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
+.range-card { padding: 20px; border: 1.5px solid var(--line); border-radius: 10px; background: #fff; }
+.range-card.active { border-color: var(--navy); background: #f8fafc; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05); }
 
-    .summary .btn {
-        grid-column: 2;
-        grid-row: 1 / span 2;
-        width: auto;
-        max-width: 138px;
-        margin-top: 0;
-        padding: 10px 12px;
-        font-size: 0.9rem;
-        line-height: 1.25;
-        text-align: center;
-    }
+.mortgage-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; padding: 24px; background: #f0f9ff; border-radius: 10px; border: 1.5px solid #0284c7; }
 
-    .result { padding: 20px 16px 60px; }
-    .hero { padding: 28px 22px; }
-    .block { padding: 24px 20px; }
+.blueprint-container { overflow: hidden; border-radius: 12px; border: 1px solid #334155; }
+.blueprint-svg { width: 100%; height: auto; display: block; background: #0f172a; }
 
-    .table thead,
-    .col-detail,
-    .col-share {
-        display: none;
-    }
+.btn { display: inline-flex; align-items: center; justify-content: center; padding: 12px 22px; border-radius: 8px; font-weight: 600; text-decoration: none; cursor: pointer; border: 1px solid var(--line); background: #fff; color: var(--ink); transition: all 0.15s; }
+.btn:hover { background: #f8fafc; }
+.btn-solid { background: var(--navy); color: #fff; border-color: var(--navy); }
+.btn-solid:hover { background: var(--navy-2); }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
 
-    .sub-mobile {
-        display: block;
-    }
-
-    .actions .btn {
-        flex: 1 1 100%;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-        transition: none !important;
-    }
-}
-
-@media print {
-    body { background: #fff; }
-    .top, .actions { display: none; }
-    .result { padding: 0; }
-    .block { border: 0; padding: 16px 0; }
-}
-
-.set-note {
-    margin: 0 0 18px;
+@media (max-width: 640px) {
+    .hero { padding: 24px; }
+    .curr-picker { position: static; margin-bottom: 16px; }
+    .sheet { padding: 20px; }
 }
-
 {% endraw %}
     </style>
 </head>
@@ -2579,129 +888,231 @@ input[type="number"]:focus {
 
 <header class="top">
     <a class="brand" href="{{ url_for('index') }}">
-        <span class="brand-mark">
-            <svg width="24" height="24" viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M6 17 16 8l10 9M9 15v10h14V15"/>
-            </svg>
-        </span>
-        <span class="brand-name">Конструктор житла</span>
+        <span>🏠</span>
+        <span>Конструктор житла</span>
     </a>
 </header>
 
 <main class="result">
-
-    <!-- Підсумок -->
     <section class="hero">
-        <p class="summary-label">Орієнтовна вартість</p>
-        <h1 class="hero-total">{{ calc.total|money }}<span class="cur">грн</span></h1>
-        <p class="summary-per">Близько {{ calc.per_m2|money }} грн за м²</p>
-
-        <ul class="meta">
-            <li>{{ calc.type_title }}</li>
-            <li>{{ calc.city_name }}</li>
-            <li>{{ calc.area|dec }} м²</li>
-            <li>{{ calc.rooms_label }}</li>
-            {% if calc.floors_label %}<li>{{ calc.floors_label }}</li>{% endif %}
-        </ul>
-
-        <div class="bar" aria-hidden="true">
-            {% for row in calc.rows %}
-            <span class="seg seg-{{ loop.index0 }}" style="flex-grow: {{ row.cost }}"></span>
-            {% endfor %}
-            <span class="seg seg-work" style="flex-grow: {{ calc.work_cost }}"></span>
+        <div class="curr-picker">
+            <button type="button" class="curr-btn active" onclick="setCurr('UAH', 1.0, 'грн')">₴ UAH</button>
+            <button type="button" class="curr-btn" onclick="setCurr('USD', {{ rates.USD }}, '$')">$ USD</button>
+            <button type="button" class="curr-btn" onclick="setCurr('EUR', {{ rates.EUR }}, '€')">€ EUR</button>
         </div>
 
-        <ul class="legend">
-            {% for row in calc.rows %}
-            <li>
-                <span class="swatch seg-{{ loop.index0 }}"></span>
-                <span class="legend-name">{{ row.label }}</span>
-                <span class="legend-sum">{{ row.cost|money }} грн</span>
-            </li>
-            {% endfor %}
-            <li>
-                <span class="swatch seg-work"></span>
-                <span class="legend-name">Роботи</span>
-                <span class="legend-sum">{{ calc.work_cost|money }} грн</span>
-            </li>
-        </ul>
+        <p style="color: rgba(255,255,255,0.7); font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600;">Загальна вартість</p>
+        <h1 class="hero-total"><span id="valTotal">{{ calc.total|money }}</span> <span id="valSymbol" style="color:var(--amber);">грн</span></h1>
+        <p style="margin-top: 8px; color: rgba(255,255,255,0.85);">Близько <span id="valPerM2">{{ calc.per_m2|money }}</span> <span class="valSym">грн</span> за м² • {{ calc.type_title }} у м. {{ calc.city_name }} ({{ calc.area|dec }} м²)</p>
     </section>
 
-    <!-- Таблиця -->
-    <section class="sheet block">
-        <h2>З чого складається сума</h2>
+    <!-- Оновлений інтерактивний архітектурний план (SVG Blueprint) -->
+    <section class="sheet">
+        <h2>Архітектурне креслення планоміру ({{ calc.area|dec }} м²)</h2>
+        <div class="blueprint-container">
+            <svg class="blueprint-svg" viewBox="0 0 600 280" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                        <path d="M 20 0 L 0 0 0 20" fill="none" stroke="rgba(59, 130, 246, 0.12)" stroke-width="1"/>
+                    </pattern>
+                    <pattern id="grid-thick" width="100" height="100" patternUnits="userSpaceOnUse">
+                        <rect width="100" height="100" fill="url(#grid)"/>
+                        <path d="M 100 0 L 0 0 0 100" fill="none" stroke="rgba(59, 130, 246, 0.25)" stroke-width="1.5"/>
+                    </pattern>
+                    <marker id="arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+                        <path d="M 0 2 L 5 5 L 0 8 z" fill="#38bdf8"/>
+                    </marker>
+                </defs>
 
+                <!-- Фон креслення -->
+                <rect width="100%" height="100%" fill="#0f172a"/>
+                <rect width="100%" height="100%" fill="url(#grid-thick)"/>
+
+                <!-- Компаса (Роза вітрів) -->
+                <g transform="translate(540, 42)">
+                    <circle cx="0" cy="0" r="16" fill="none" stroke="rgba(255,255,255,0.2)" stroke-width="1"/>
+                    <path d="M 0 -12 L 4 0 L 0 -3 L -4 0 Z" fill="#38bdf8"/>
+                    <path d="M 0 12 L 4 0 L 0 3 L -4 0 Z" fill="rgba(255,255,255,0.3)"/>
+                    <text x="0" y="-18" fill="#38bdf8" font-size="9" font-family="sans-serif" font-weight="bold" text-anchor="middle">ПН</text>
+                </g>
+
+                <!-- Зовнішні розмірні лінії з стрілками -->
+                <g stroke="#38bdf8" stroke-width="1" opacity="0.8">
+                    <!-- Верхній розмір -->
+                    <line x1="60" y1="28" x2="480" y2="28" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+                    <line x1="60" y1="22" x2="60" y2="42" stroke-dasharray="2 2"/>
+                    <line x1="480" y1="22" x2="480" y2="42" stroke-dasharray="2 2"/>
+                    <!-- Лівий розмір -->
+                    <line x1="28" y1="50" x2="28" y2="210" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+                    <line x1="22" y1="50" x2="42" y2="50" stroke-dasharray="2 2"/>
+                    <line x1="22" y1="210" x2="42" y2="210" stroke-dasharray="2 2"/>
+                </g>
+                <text x="270" y="22" fill="#38bdf8" font-size="11" font-family="monospace" text-anchor="middle" font-weight="600">{{ ((calc.area ** 0.5) * 1.3)|round(1)|dec }} м</text>
+                <text x="20" y="135" fill="#38bdf8" font-size="11" font-family="monospace" text-anchor="middle" font-weight="600" transform="rotate(-90, 20, 135)">{{ ((calc.area ** 0.5) / 1.3)|round(1)|dec }} м</text>
+
+                <!-- Контур зовнішніх капітальних стін -->
+                <rect x="60" y="50" width="420" height="160" fill="rgba(30, 41, 59, 0.85)" stroke="#38bdf8" stroke-width="4" rx="2"/>
+
+                <!-- Віконні прорізи (помаранчеві акценти) -->
+                <line x1="120" y1="50" x2="180" y2="50" stroke="#f59e0b" stroke-width="5"/>
+                <line x1="300" y1="50" x2="360" y2="50" stroke="#f59e0b" stroke-width="5"/>
+                <line x1="120" y1="210" x2="180" y2="210" stroke="#f59e0b" stroke-width="5"/>
+                <line x1="300" y1="210" x2="360" y2="210" stroke="#f59e0b" stroke-width="5"/>
+
+                <!-- Внутрішнє планування залежно від кімнат -->
+                {% if calc.rooms == 1 %}
+                    <rect x="64" y="54" width="412" height="152" fill="rgba(59, 130, 246, 0.08)"/>
+                    <text x="270" y="125" fill="#ffffff" font-size="14" font-family="sans-serif" font-weight="600" text-anchor="middle">Основний простір / Студія</text>
+                    <text x="270" y="145" fill="#94a3b8" font-size="12" font-family="monospace" text-anchor="middle">~{{ calc.area|dec }} м²</text>
+
+                {% elif calc.rooms == 2 %}
+                    <line x1="280" y1="50" x2="280" y2="210" stroke="#38bdf8" stroke-width="3"/>
+                    <path d="M 280 110 A 25 25 0 0 1 280 135" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 2"/>
+
+                    <text x="170" y="125" fill="#ffffff" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle">Вітальня / Зала</text>
+                    <text x="170" y="145" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.55)|round(1)|dec }} м²</text>
+
+                    <text x="380" y="125" fill="#ffffff" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня</text>
+                    <text x="380" y="145" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.45)|round(1)|dec }} м²</text>
+
+                {% elif calc.rooms == 3 %}
+                    <line x1="270" y1="50" x2="270" y2="210" stroke="#38bdf8" stroke-width="3"/>
+                    <line x1="270" y1="130" x2="480" y2="130" stroke="#38bdf8" stroke-width="3"/>
+                    <path d="M 270 90 A 20 20 0 0 1 270 110" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="3 2"/>
+
+                    <text x="165" y="125" fill="#ffffff" font-size="13" font-family="sans-serif" font-weight="600" text-anchor="middle">Вітальня</text>
+                    <text x="165" y="145" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.45)|round(1)|dec }} м²</text>
+
+                    <text x="375" y="85" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 1</text>
+                    <text x="375" y="103" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.30)|round(1)|dec }} м²</text>
+
+                    <text x="375" y="165" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 2 / Кабінет</text>
+                    <text x="375" y="183" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.25)|round(1)|dec }} м²</text>
+
+                {% elif calc.rooms == 4 %}
+                    <line x1="270" y1="50" x2="270" y2="210" stroke="#38bdf8" stroke-width="3"/>
+                    <line x1="60" y1="130" x2="480" y2="130" stroke="#38bdf8" stroke-width="3"/>
+
+                    <text x="165" y="85" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Вітальня</text>
+                    <text x="165" y="103" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.35)|round(1)|dec }} м²</text>
+
+                    <text x="375" y="85" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 1</text>
+                    <text x="375" y="103" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.25)|round(1)|dec }} м²</text>
+
+                    <text x="165" y="165" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Кухня / Їдальня</text>
+                    <text x="165" y="183" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.20)|round(1)|dec }} м²</text>
+
+                    <text x="375" y="165" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 2</text>
+                    <text x="375" y="183" fill="#94a3b8" font-size="11" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.20)|round(1)|dec }} м²</text>
+
+                {% else %}
+                    <line x1="200" y1="50" x2="200" y2="210" stroke="#38bdf8" stroke-width="3"/>
+                    <line x1="340" y1="50" x2="340" y2="210" stroke="#38bdf8" stroke-width="3"/>
+                    <line x1="200" y1="130" x2="480" y2="130" stroke="#38bdf8" stroke-width="3"/>
+
+                    <text x="130" y="125" fill="#ffffff" font-size="12" font-family="sans-serif" font-weight="600" text-anchor="middle">Вітальня</text>
+                    <text x="130" y="143" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.3)|round(1)|dec }} м²</text>
+
+                    <text x="270" y="85" fill="#ffffff" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 1</text>
+                    <text x="270" y="103" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.2)|round(1)|dec }} м²</text>
+
+                    <text x="410" y="85" fill="#ffffff" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle">Спальня 2</text>
+                    <text x="410" y="103" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.2)|round(1)|dec }} м²</text>
+
+                    <text x="270" y="165" fill="#ffffff" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle">Кабінет</text>
+                    <text x="270" y="183" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.15)|round(1)|dec }} м²</text>
+
+                    <text x="410" y="165" fill="#ffffff" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle">Дитяча</text>
+                    <text x="410" y="183" fill="#94a3b8" font-size="10" font-family="monospace" text-anchor="middle">~{{ (calc.area * 0.15)|round(1)|dec }} м²</text>
+                {% endif %}
+
+                <!-- Архітектурний штамп проєкту -->
+                <g transform="translate(320, 222)">
+                    <rect x="0" y="0" width="260" height="48" fill="#1e293b" stroke="#38bdf8" stroke-width="1.5" rx="4"/>
+                    <line x1="0" y1="24" x2="260" y2="24" stroke="#334155" stroke-width="1"/>
+                    <line x1="130" y1="0" x2="130" y2="48" stroke="#334155" stroke-width="1"/>
+                    <text x="10" y="16" fill="#38bdf8" font-size="10" font-family="monospace" font-weight="bold">ОБ'ЄКТ: {{ calc.type_title.upper() }}</text>
+                    <text x="140" y="16" fill="#f59e0b" font-size="10" font-family="monospace" font-weight="bold">ПЛОЩА: {{ calc.area|dec }} М²</text>
+                    <text x="10" y="38" fill="#94a3b8" font-size="9" font-family="sans-serif">ПОВЕРХІВ: {{ calc.floors }} | КІМНАТ: {{ calc.rooms }}</text>
+                    <text x="140" y="38" fill="#94a3b8" font-size="9" font-family="sans-serif">М. {{ calc.city_name.upper() }}</text>
+                </g>
+            </svg>
+        </div>
+    </section>
+
+    <!-- Вилка цін -->
+    <section class="sheet">
+        <h2>Порівняльна вилка цін</h2>
+        <div class="range-grid">
+            <div class="range-card">
+                <span class="sub">Бюджетний варіант</span>
+                <strong style="display: block; font-size: 1.25rem; font-family: var(--font-mono); margin-top: 4px;"><span class="valRangeMin">{{ calc.range.min_total|money }}</span> <span class="valSym">грн</span></strong>
+            </div>
+            <div class="range-card active">
+                <span class="sub" style="color: var(--navy); font-weight: 700;">Ваш вибір</span>
+                <strong style="display: block; font-size: 1.25rem; font-family: var(--font-mono); margin-top: 4px; color: var(--navy);"><span class="valRangeSel">{{ calc.total|money }}</span> <span class="valSym">грн</span></strong>
+            </div>
+            <div class="range-card">
+                <span class="sub">Преміум варіант</span>
+                <strong style="display: block; font-size: 1.25rem; font-family: var(--font-mono); margin-top: 4px;"><span class="valRangeMax">{{ calc.range.max_total|money }}</span> <span class="valSym">грн</span></strong>
+            </div>
+        </div>
+    </section>
+
+    <!-- Калькулятор Іпотеки ("єОселя") -->
+    <section class="sheet">
+        <h2>Розрахунок іпотеки (Програма «єОселя» під 7%)</h2>
+        <div class="mortgage-box">
+            <div>
+                <span class="sub">Перший внесок (20%)</span>
+                <strong style="font-size: 1.2rem; font-family: var(--font-mono); display: block; margin-top: 4px;"><span id="valDown">{{ calc.mortgage.down_payment|money }}</span> <span class="valSym">грн</span></strong>
+            </div>
+            <div>
+                <span class="sub">Сума кредиту</span>
+                <strong style="font-size: 1.2rem; font-family: var(--font-mono); display: block; margin-top: 4px;"><span id="valLoan">{{ calc.mortgage.loan_amount|money }}</span> <span class="valSym">грн</span></strong>
+            </div>
+            <div>
+                <span class="sub">Щомісячний платіж (20 років)</span>
+                <strong style="font-size: 1.2rem; font-family: var(--font-mono); color: var(--steel); display: block; margin-top: 4px;"><span id="valMonthly">{{ calc.mortgage.monthly_payment|money }}</span> <span class="valSym">грн</span>/міс</strong>
+            </div>
+        </div>
+    </section>
+
+    <!-- Деталізація кошторису -->
+    <section class="sheet">
+        <h2>Деталізація кошторису</h2>
         <table class="table">
             <thead>
                 <tr>
                     <th>Позиція</th>
-                    <th class="num col-detail">Площа</th>
-                    <th class="num col-detail">Ціна за м²</th>
+                    <th class="num">Площа</th>
+                    <th class="num">Ціна / м²</th>
                     <th class="num">Вартість</th>
-                    <th class="num col-share">Частка</th>
                 </tr>
             </thead>
             <tbody>
                 {% for row in calc.rows %}
                 <tr>
                     <td>
-                        <div class="cell-flex">
-                            <span class="swatch seg-{{ loop.index0 }}"></span>
-                            <div>
-                                <strong>{{ row.label }}</strong>
-                                <span class="sub">{{ row.material }}</span>
-                                <span class="sub sub-mobile">{{ row.area|dec }} м² × {{ row.unit_price|money }} грн/м²</span>
-                            </div>
-                        </div>
+                        <strong style="color: var(--navy);">{{ row.label }}</strong>
+                        <span class="sub">{{ row.material }}</span>
                     </td>
-                    <td class="num col-detail">{{ row.area|dec }} м²</td>
-                    <td class="num col-detail">{{ row.unit_price|money }} грн</td>
-                    <td class="num">{{ row.cost|money }} грн</td>
-                    <td class="num col-share">{{ row.share }}%</td>
+                    <td class="num">{{ row.area|dec }} м²</td>
+                    <td class="num"><span class="valRowPrice" data-base="{{ row.unit_price }}">{{ row.unit_price|money }}</span> <span class="valSym">грн</span></td>
+                    <td class="num"><span class="valRowCost" data-base="{{ row.cost }}">{{ row.cost|money }}</span> <span class="valSym">грн</span></td>
                 </tr>
                 {% endfor %}
                 <tr>
                     <td>
-                        <div class="cell-flex">
-                            <span class="swatch seg-work"></span>
-                            <div>
-                                <strong>Роботи</strong>
-                                <span class="sub">{{ calc.work_pct }}% від вартості матеріалів</span>
-                            </div>
-                        </div>
+                        <strong style="color: var(--navy);">Роботи</strong>
+                        <span class="sub">{{ calc.work_pct }}% від матеріалів</span>
                     </td>
-                    <td class="num col-detail">—</td>
-                    <td class="num col-detail">—</td>
-                    <td class="num">{{ calc.work_cost|money }} грн</td>
-                    <td class="num col-share">{{ calc.work_share }}%</td>
+                    <td class="num">—</td>
+                    <td class="num">—</td>
+                    <td class="num"><span class="valWorkCost" data-base="{{ calc.work_cost }}">{{ calc.work_cost|money }}</span> <span class="valSym">грн</span></td>
                 </tr>
             </tbody>
-            <tfoot>
-                <tr>
-                    <td>Разом</td>
-                    <td class="col-detail"></td>
-                    <td class="col-detail"></td>
-                    <td class="num">{{ calc.total|money }} грн</td>
-                    <td class="col-share"></td>
-                </tr>
-            </tfoot>
         </table>
-    </section>
-
-    <!-- Як рахували -->
-    <section class="sheet block">
-        <h2>Як ми рахували</h2>
-        <ul class="notes">
-            <li>Ціни враховують коефіцієнт міста {{ calc.city_name }}: ×{{ ('%.2f'|format(calc.city_coef))|replace('.', ',') }}.</li>
-            {% if calc.building_type == 'apartment' %}
-            <li>Площа стін розрахункова: вона зростає разом із кількістю кімнат, бо додаються перегородки.</li>
-            <li>Не враховано: вікна й двері, електрику, сантехніку, кухню та меблі.</li>
-            {% else %}
-            <li>Стіни — це зовнішні стіни з урахуванням поверхів і внутрішні перегородки. Площа даху враховує нахил і звіси.</li>
-            <li>Не враховано: фундамент, вікна й двері, інженерні системи, зовнішнє оздоблення та благоустрій.</li>
-            {% endif %}
-            <li>Ціни на матеріали орієнтовні й можуть відрізнятися залежно від постачальника та сезону.</li>
-        </ul>
     </section>
 
     <div class="actions">
@@ -2711,14 +1122,60 @@ input[type="number"]:focus {
             {% endfor %}
             <button type="submit" class="btn btn-solid">Змінити параметри</button>
         </form>
-        <a class="btn btn-ghost" href="{{ url_for('index') }}">Новий розрахунок</a>
-        <button type="button" class="btn btn-ghost" onclick="window.print()">Роздрукувати</button>
-    </div>
 
+        <form action="{{ url_for('download_txt') }}" method="post">
+            {% for name, value in calc.form.items() %}
+            <input type="hidden" name="{{ name }}" value="{{ value }}">
+            {% endfor %}
+            <button type="submit" class="btn">Завантажити кошторис (.txt)</button>
+        </form>
+
+        <a class="btn" href="{{ url_for('index') }}">Новий розрахунок</a>
+        <button type="button" class="btn" onclick="window.print()">Роздрукувати</button>
+    </div>
 </main>
 
-</body>
+<script>
+    var baseTotal = {{ calc.total }};
+    var basePerM2 = {{ calc.per_m2 }};
+    var baseMin = {{ calc.range.min_total }};
+    var baseMax = {{ calc.range.max_total }};
+    var baseDown = {{ calc.mortgage.down_payment }};
+    var baseLoan = {{ calc.mortgage.loan_amount }};
+    var baseMonthly = {{ calc.mortgage.monthly_payment }};
 
+    function fmt(n) {
+        return new Intl.NumberFormat('uk-UA').format(Math.round(n));
+    }
+
+    function setCurr(code, rate, symbol) {
+        document.querySelectorAll('.curr-btn').forEach(function(btn) { btn.classList.remove('active'); });
+        event.target.classList.add('active');
+
+        document.getElementById('valTotal').textContent = fmt(baseTotal / rate);
+        document.getElementById('valSymbol').textContent = symbol;
+        document.getElementById('valPerM2').textContent = fmt(basePerM2 / rate);
+
+        document.querySelectorAll('.valSym').forEach(function(el) { el.textContent = symbol; });
+        document.querySelector('.valRangeMin').textContent = fmt(baseMin / rate);
+        document.querySelector('.valRangeSel').textContent = fmt(baseTotal / rate);
+        document.querySelector('.valRangeMax').textContent = fmt(baseMax / rate);
+
+        document.getElementById('valDown').textContent = fmt(baseDown / rate);
+        document.getElementById('valLoan').textContent = fmt(baseLoan / rate);
+        document.getElementById('valMonthly').textContent = fmt(baseMonthly / rate);
+
+        document.querySelectorAll('.valRowPrice').forEach(function(el) {
+            el.textContent = fmt(parseFloat(el.getAttribute('data-base')) / rate);
+        });
+        document.querySelectorAll('.valRowCost').forEach(function(el) {
+            el.textContent = fmt(parseFloat(el.getAttribute('data-base')) / rate);
+        });
+        document.querySelector('.valWorkCost').textContent = fmt(parseFloat(document.querySelector('.valWorkCost').getAttribute('data-base')) / rate);
+    }
+</script>
+
+</body>
 </html>
 """
 
@@ -2728,12 +1185,11 @@ input[type="number"]:focus {
 # ---------------------------------------------------------------------------
 
 def find_free_port(start=5000, tries=30):
-    """Шукає вільний порт, щоб не потрапити на старий сервер, який ще працює."""
     for port in range(start, start + tries):
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.3).close()
         except OSError:
-            return port  # ніхто не слухає — порт вільний
+            return port
     return start
 
 
